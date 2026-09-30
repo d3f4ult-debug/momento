@@ -47,6 +47,7 @@ from services.google_workspace import (
     save_oauth_code,
     list_google_drive_files,
     read_google_sheet,
+    ensure_google_client_secrets_file,
 )
 from services.file_exporter import (
     generate_export_file,
@@ -109,8 +110,15 @@ if not os.path.exists(TEMPLATES_DIR):
     TEMPLATES_DIR = "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# Ensure Downloads Directory Exists
+# Ensure Downloads Directory and Google Client Secrets Exist (support Render/cloud environments)
 ensure_downloads_dir()
+ensure_google_client_secrets_file()
+
+
+@app.on_event("startup")
+async def on_app_startup():
+    ensure_downloads_dir()
+    ensure_google_client_secrets_file()
 
 
 # ==============================================================================

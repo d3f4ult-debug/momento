@@ -24,6 +24,45 @@ TOKEN_FILE = os.path.abspath(os.getenv("GOOGLE_TOKEN_FILE", os.path.join(BASE_DI
 CLIENT_SECRETS_FILE = os.path.abspath(os.getenv("GOOGLE_CLIENT_SECRETS_FILE", os.path.join(BASE_DIR, "client_secret.json")))
 
 
+def ensure_google_client_secrets_file() -> bool:
+    """
+    Ensure client_secret.json exists on disk.
+    If client_secret.json doesn't exist locally, dynamically create it from
+    the GOOGLE_CLIENT_SECRET_JSON environment variable (essential for cloud platforms like Render).
+    """
+    if os.path.exists(CLIENT_SECRETS_FILE):
+        return True
+
+    env_json = os.getenv("GOOGLE_CLIENT_SECRET_JSON") or os.getenv("GOOGLE_CLIENT_SECRETS_JSON")
+    if env_json and env_json.strip():
+        try:
+            content = env_json.strip()
+            # Strip outer wrapping quotes if added by shell or env managers
+            if (content.startswith("'") and content.endswith("'")) or (content.startswith('"') and content.endswith('"') and not content.startswith('{"')):
+                content = content[1:-1].strip()
+
+            try:
+                parsed = json.loads(content)
+                content = json.dumps(parsed, indent=2)
+            except Exception:
+                pass
+
+            target_dir = os.path.dirname(CLIENT_SECRETS_FILE)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+
+            with open(CLIENT_SECRETS_FILE, "w", encoding="utf-8") as f:
+                f.write(content)
+            return True
+        except Exception:
+            return False
+    return False
+
+
+# Auto-create if environment variable is present on import
+ensure_google_client_secrets_file()
+
+
 def get_google_credentials():
     """Retrieve valid user Google credentials from token file or refresh if needed."""
     try:
@@ -48,6 +87,7 @@ def get_google_credentials():
 
 def is_google_authenticated() -> Dict[str, Any]:
     """Check if the user has an active Google Workspace OAuth session."""
+    ensure_google_client_secrets_file()
     creds = get_google_credentials()
     if creds:
         return {
@@ -313,6 +353,7 @@ _LAST_OAUTH_DATA: Dict[str, Any] = {}
 
 def generate_oauth_url(redirect_uri: str) -> Dict[str, Any]:
     """Generate Google OAuth consent URL for user linking, caching PKCE code_verifier."""
+    ensure_google_client_secrets_file()
     if not os.path.exists(CLIENT_SECRETS_FILE):
         return {
             "success": False,
@@ -374,6 +415,7 @@ def save_oauth_code(code: str, redirect_uri: str, state: Optional[str] = None) -
     Exchange authorization code for tokens, restoring exact state and PKCE code_verifier
     onto the Flow instance before calling fetch_token.
     """
+    ensure_google_client_secrets_file()
     if not os.path.exists(CLIENT_SECRETS_FILE):
         return {"success": False, "error": f"'{CLIENT_SECRETS_FILE}' not found."}
 

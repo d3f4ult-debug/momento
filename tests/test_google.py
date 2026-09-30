@@ -9,7 +9,8 @@ from services.google_workspace import (
     is_google_authenticated,
     create_google_doc,
     create_google_sheet,
-    generate_oauth_url
+    generate_oauth_url,
+    ensure_google_client_secrets_file,
 )
 
 
@@ -49,8 +50,34 @@ def test_create_google_sheet_unlinked():
         assert "mock_url" in res
 
 
+def test_ensure_google_client_secrets_file_when_exists():
+    with patch("os.path.exists", return_value=True):
+        assert ensure_google_client_secrets_file() is True
+
+
+def test_ensure_google_client_secrets_file_from_env(tmp_path):
+    mock_json = '{"web": {"client_id": "123.apps.googleusercontent.com", "client_secret": "xyz"}}'
+    fake_path = str(tmp_path / "client_secret.json")
+
+    with patch("services.google_workspace.CLIENT_SECRETS_FILE", fake_path), \
+         patch.dict("os.environ", {"GOOGLE_CLIENT_SECRET_JSON": mock_json}):
+        res = ensure_google_client_secrets_file()
+        assert res is True
+        with open(fake_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            assert "123.apps.googleusercontent.com" in content
+            assert "xyz" in content
+
+
+def test_ensure_google_client_secrets_file_missing_env():
+    with patch("os.path.exists", return_value=False), \
+         patch.dict("os.environ", {"GOOGLE_CLIENT_SECRET_JSON": "", "GOOGLE_CLIENT_SECRETS_JSON": ""}):
+        assert ensure_google_client_secrets_file() is False
+
+
 def test_generate_oauth_url_missing_secrets():
-    with patch("os.path.exists", return_value=False):
+    with patch("services.google_workspace.ensure_google_client_secrets_file", return_value=False), \
+         patch("os.path.exists", return_value=False):
         res = generate_oauth_url("http://localhost:8000/api/google/callback")
         assert res["success"] is False
         assert "not found" in res["error"]
