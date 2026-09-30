@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables & local secrets
+.env
+.env.*
+!.env.example
+
+# Google Workspace OAuth tokens & secrets
+client_secret.json
+*client_secret*.json
+google_token.json
+*google_token*.json
+credentials.json
+token.json
+
+# Telegram sessions & auth data
+*.session
+*.session-journal
+.session_string
+.active_session
+
+# Uploads, downloads & temporary runtime storage
+uploads/
+downloads/
+tmp/
+temp/
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts & distribution
+build/
+dist/
+*.egg-info/

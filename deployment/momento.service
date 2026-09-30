@@ -1,0 +1,19 @@
+[Unit]
+Description=Momento - AI File-Processing Agent (FastAPI)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/momento
+Environment="PATH=/var/www/momento/venv/bin"
+EnvironmentFile=/var/www/momento/.env
+ExecStart=/var/www/momento/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 2
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
