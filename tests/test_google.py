@@ -209,3 +209,79 @@ def test_process_google_workspace_query_tool_routing():
                 assert "fully autonomous digital employee" in system_inst
                 assert "what sheets in google do I have" in system_inst
 
+
+def test_should_trigger_google_export_explicit_only():
+    from main import should_trigger_google_export
+
+    # Explicit creation / export requests MUST trigger
+    assert should_trigger_google_export("Please summarize this report and export to Google Docs") == "docs"
+    assert should_trigger_google_export("export to google sheets") == "sheets"
+    assert should_trigger_google_export("create a google sheet for sales data") == "sheets"
+    assert should_trigger_google_export("create new google doc titled 'Notes'") == "docs"
+    assert should_trigger_google_export("save as google doc") == "docs"
+    assert should_trigger_google_export("save to google sheets") == "sheets"
+
+    # Search, list, view, check queries MUST NEVER trigger file creation
+    assert should_trigger_google_export("what sheets in google do I have") is None
+    assert should_trigger_google_export("check the sheet in my Google account") is None
+    assert should_trigger_google_export("show my google spreadsheets") is None
+    assert should_trigger_google_export("what google sheet do I have") is None
+    assert should_trigger_google_export("find my google sheet") is None
+    assert should_trigger_google_export("list my google docs") is None
+    assert should_trigger_google_export("do I have a google sheet?") is None
+    assert should_trigger_google_export("can you see my google sheets") is None
+
+
+def test_list_google_drive_files_removes_momento_sheet_filter_bias():
+    from services.google_workspace import list_google_drive_files
+
+    mock_drive = MagicMock()
+    mock_drive.files().list().execute.return_value = {
+        "files": [
+            {
+                "id": "real_sheet_1",
+                "name": "Q3 Financials Actual",
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "webViewLink": "https://docs.google.com/spreadsheets/d/real_sheet_1/edit",
+                "modifiedTime": "2026-09-28T10:00:00Z"
+            }
+        ]
+    }
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_drive):
+            # Passing 'Momento Sheet' or 'template' must be stripped to prevent locking onto template files
+            res = list_google_drive_files(file_type="sheet", query="Momento Sheet")
+            assert res["success"] is True
+            # Verify the API query sent to drive does NOT filter strictly for 'Momento Sheet'
+            list_call_args = mock_drive.files().list.call_args.kwargs
+            query_sent = list_call_args.get("q", "")
+            assert "name contains 'Momento Sheet'" not in query_sent
+            assert "name contains 'momento sheet'" not in query_sent.lower()
+            assert "application/vnd.google-apps.spreadsheet" in query_sent
+
+
+def test_no_sheet_created_on_workspace_search_query():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    with patch("main.list_google_drive_files") as mock_list, \
+         patch("main.create_google_sheet") as mock_create_sheet, \
+         patch("main.create_google_doc") as mock_create_doc, \
+         patch("main.is_google_authenticated", return_value={"authenticated": True}), \
+         patch("main.execute_gemini_transformation", return_value="Here are your files"):
+
+        mock_list.return_value = {
+            "success": True,
+            "count": 1,
+            "files": [{"id": "s1", "name": "Actual Sales", "type": "Google Sheet", "link": "http://sheet"}]
+        }
+
+        # Query that asks about Google Sheets must search Drive and NEVER create a new sheet or doc
+        response = client.post("/api/process", data={"prompt": "check my google sheet"})
+        assert response.status_code == 200
+        assert mock_list.called
+        mock_create_sheet.assert_not_called()
+        mock_create_doc.assert_not_called()
+

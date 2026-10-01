@@ -133,7 +133,7 @@ def parse_text_to_matrix(text: str) -> List[List[str]]:
         else:
             table_rows.append([line_str])
 
-    return table_rows if table_rows else [["Momento Output", text[:500]]]
+    return table_rows if table_rows else [["Data", text[:500]]]
 
 
 def create_google_doc(title: str, content: str) -> Dict[str, Any]:
@@ -217,7 +217,7 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
             matrix = parse_text_to_matrix(raw_text)
 
         if not matrix:
-            matrix = [["Momento Output"], ["No tabular data found"]]
+            matrix = [["Data"], ["No tabular data found"]]
 
         # 3. Write data to Sheet1
         value_range_body = {
@@ -250,7 +250,7 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
 def list_google_drive_files(
     file_type: Optional[str] = None,
     query: Optional[str] = None,
-    page_size: int = 25
+    page_size: int = 50
 ) -> Dict[str, Any]:
     """Search and list Google Drive files (Google Sheets, Google Docs, etc.)."""
     creds = get_google_credentials()
@@ -274,8 +274,13 @@ def list_google_drive_files(
             query_parts.append("mimeType = 'application/vnd.google-apps.document'")
 
         if query and query.strip():
-            safe_q = query.strip().replace("'", "\\'")
-            query_parts.append(f"name contains '{safe_q}'")
+            safe_q = query.strip()
+            # Strip out any strict or biased filters for 'Momento Sheet' or default templates
+            # so the user's real files are always retrieved dynamically.
+            clean_search = re.sub(r"\b(?:momento\s*(?:sheet|doc|export)?|template|default)\b", "", safe_q, flags=re.IGNORECASE).strip()
+            if clean_search:
+                escaped_q = clean_search.replace("'", "\\'")
+                query_parts.append(f"name contains '{escaped_q}'")
 
         q_str = " and ".join(query_parts)
 

@@ -3390,7 +3390,7 @@
 
                 try {
                     const fd = new FormData();
-                    fd.append('title', `Momento Doc - ${new Date().toLocaleDateString()}`);
+                    fd.append('title', `Document - ${new Date().toLocaleDateString()}`);
                     fd.append('content', rawResult);
 
                     const res = await fetch('/api/google/export/doc', { method: 'POST', body: fd });
@@ -3426,7 +3426,7 @@
 
                 try {
                     const fd = new FormData();
-                    fd.append('title', `Momento Sheet - ${new Date().toLocaleDateString()}`);
+                    fd.append('title', `Spreadsheet - ${new Date().toLocaleDateString()}`);
                     fd.append('content', rawResult);
 
                     const res = await fetch('/api/google/export/sheet', { method: 'POST', body: fd });

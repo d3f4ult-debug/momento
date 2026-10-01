@@ -632,12 +632,35 @@ def detect_telegram_management_intent(prompt: str, has_file: bool = False) -> Op
 
 
 def should_trigger_google_export(prompt: str) -> Optional[str]:
-    """Detect if prompt requests export to Google Docs or Google Sheets."""
-    prompt_lower = prompt.lower()
-    if "google doc" in prompt_lower or "gdoc" in prompt_lower:
+    """
+    Detect if prompt explicitly requests creating or exporting to Google Docs or Google Sheets.
+    The agent should NEVER create a new Google Sheet or Doc unless the user explicitly asks it to create one.
+    Queries that simply list, view, find, check, or inspect documents/spreadsheets will NOT trigger creation.
+    """
+    if not prompt:
+        return None
+    p_lower = prompt.lower().strip()
+
+    # Require explicit creation or export directives
+    explicit_create_patterns = [
+        r"\b(?:create|export|save|generate|make|upload|push|write)\b.*?\b(?:to|as|a|new|into)?\s*(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b",
+        r"\b(?:export\s+to|save\s+(?:as|to)|create\s+(?:a\s+)?(?:new\s+)?|make\s+(?:a\s+)?(?:new\s+)?|generate\s+(?:a\s+)?(?:new\s+)?)\b.*?\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b",
+        r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b.*?\b(?:export|creation|create)\b"
+    ]
+
+    has_create_intent = any(re.search(pat, p_lower) for pat in explicit_create_patterns)
+    if not has_create_intent:
+        return None
+
+    # Disallow if it's an inquiry asking whether files were already created
+    if re.search(r"\b(?:did\s+(?:you|i)|can\s+you\s+see|check\s+if)\b", p_lower):
+        return None
+
+    if re.search(r"\b(?:google\s+docs?|gdocs?)\b", p_lower):
         return "docs"
-    elif "google sheet" in prompt_lower or "gsheet" in prompt_lower:
+    elif re.search(r"\b(?:google\s+sheets?|google\s+spreadsheets?|gsheets?)\b", p_lower):
         return "sheets"
+
     return None
 
 
@@ -764,26 +787,42 @@ def detect_olx_search_intent(prompt: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def extract_custom_title(prompt: str) -> Optional[str]:
+    """Extract user-specified custom title from prompt like 'titled XYZ' or 'named XYZ'."""
+    m = re.search(r"\b(?:titled|named|called)\s+['\"]([^'\"]+)['\"]", prompt, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r"\b(?:titled|named|called)\s+([A-Za-z0-9_\- ]+?)(?:\s+(?:with|containing|for|using|$))", prompt, re.IGNORECASE)
+    if m2:
+        return m2.group(1).strip()
+    return None
+
+
 def detect_google_workspace_query(prompt: str) -> Optional[Dict[str, Any]]:
     """
     Detect if user's natural language query asks to list, search, or inspect
     connected Google Drive files, Google Sheets, or Google Docs.
+    Never locks onto or defaults to 'Momento Sheet' or template files.
     """
     p = prompt.lower().strip()
 
-    # Sheets search/list: e.g. "what sheets in google do i have", "show my google spreadsheets"
-    sheets_pattern = r"\b(what|list|show|find|search|get|see|display|check)\b.*\b(sheets?|spreadsheets?)\b"
+    # Exclude explicit creation/export requests from being treated solely as read/list queries
+    if should_trigger_google_export(prompt):
+        return None
+
+    # Sheets search/list/inspect: e.g. "what sheets in google do i have", "show my google spreadsheets"
+    sheets_pattern = r"\b(what|list|show|find|search|get|see|display|check|view|open|read|inspect|browse|examine)\b.*\b(sheets?|spreadsheets?)\b"
     if re.search(sheets_pattern, p) or ("sheets" in p and any(k in p for k in ["google", "drive", "my", "account"])):
         return {"action": "list_files", "file_type": "sheet", "query": None}
 
-    # Docs search/list: e.g. "what docs do i have", "list google docs"
-    docs_pattern = r"\b(what|list|show|find|search|get|see|display|check)\b.*\b(docs?|documents?)\b"
+    # Docs search/list/inspect: e.g. "what docs do i have", "list google docs"
+    docs_pattern = r"\b(what|list|show|find|search|get|see|display|check|view|open|read|inspect|browse|examine)\b.*\b(docs?|documents?)\b"
     if re.search(docs_pattern, p) or ("docs" in p and any(k in p for k in ["google", "drive", "my", "account"])):
         return {"action": "list_files", "file_type": "doc", "query": None}
 
-    # General Google Drive search/list: e.g. "what files do i have in google drive", "search drive"
+    # General Google Drive search/list/inspect: e.g. "what files do i have in google drive", "search drive"
     drive_pattern = r"\b(google drive|my drive|in drive|on drive)\b"
-    if re.search(drive_pattern, p) and any(k in p for k in ["what", "list", "show", "find", "search", "get", "see", "files"]):
+    if re.search(drive_pattern, p) and any(k in p for k in ["what", "list", "show", "find", "search", "get", "see", "files", "view", "open", "check"]):
         return {"action": "list_files", "file_type": None, "query": None}
 
     return None
@@ -1630,10 +1669,13 @@ async def process_chat_query(
         "You are Momento, a fully autonomous digital employee with direct access to the user's connected "
         "Google Workspace (Drive, Docs, Sheets). When the user asks about their files or spreadsheets "
         "(e.g., 'what sheets in google do I have'), you MUST use the Google Drive/Sheets search tool to find "
-        "their files, list them out clearly, and proactively offer to read or edit them. "
+        "their actual, real files, list them out clearly with clickable Markdown links and bullet points, "
+        "and proactively invite the user to select, examine, summarize, edit, or transform them. "
+        "Always present their actual dynamic files from Drive. Never default to, fabricate, or lock onto placeholder "
+        "names like 'Momento Sheet'. "
+        "Never create a new Google Sheet or Document unless the user explicitly and directly instructs you to create or export one. "
         "Never give canned refusals saying you are an AI or cannot access external files. You have live Google Workspace API access. "
-        "When files are retrieved, format them clearly with clickable Markdown links and bullet points, "
-        "and proactively invite the user to let you examine, summarize, edit, or transform them."
+        "When files are retrieved, format them clearly with clickable Markdown links and bullet points."
     )
 
     # ==========================================================================
@@ -1906,14 +1948,16 @@ async def process_chat_query(
                 "error": "Telegram dispatch triggered, but no recipient contact or chat name was specified."
             }
 
-    # Conditional Google Workspace Export Stub
+    # Conditional Google Workspace Export (Executed strictly on explicit user creation/export command)
     google_export_result = None
     export_type = should_trigger_google_export(prompt)
     if export_type == "docs":
-        doc_title = f"Momento Export - {file_metadata['filename'] if file_metadata else 'Notes'}"
+        custom_title = extract_custom_title(prompt)
+        doc_title = custom_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
         google_export_result = create_google_doc(doc_title, result_text)
     elif export_type == "sheets":
-        sheet_title = f"Momento Sheet - {file_metadata['filename'] if file_metadata else 'Data'}"
+        custom_title = extract_custom_title(prompt)
+        sheet_title = custom_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
         google_export_result = create_google_sheet(sheet_title, raw_text=result_text)
 
     elapsed_seconds = round(time.time() - start_time, 2)
