@@ -275,6 +275,8 @@ def list_google_drive_files(
             query_parts.append("(mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType = 'application/vnd.ms-excel' or mimeType = 'text/csv')")
         elif type_lower in ["doc", "docs", "document", "documents"]:
             query_parts.append("(mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mimeType = 'application/pdf' or mimeType = 'text/plain')")
+        elif type_lower in ["folder", "folders"]:
+            query_parts.append("mimeType = 'application/vnd.google-apps.folder'")
 
         if query and query.strip():
             safe_q = query.strip()
@@ -329,6 +331,12 @@ def list_google_drive_files(
                             or f.get("name", "").lower().endswith((".docx", ".doc", ".pdf", ".txt"))
                         ]
                         raw_files = matching if matching else fallback_files
+                    elif type_lower in ["folder", "folders"]:
+                        matching = [
+                            f for f in fallback_files
+                            if f.get("mimeType") == "application/vnd.google-apps.folder" or "folder" in f.get("mimeType", "").lower()
+                        ]
+                        raw_files = matching if matching else fallback_files
                     else:
                         raw_files = fallback_files
             except Exception:
@@ -338,7 +346,10 @@ def list_google_drive_files(
         for f in raw_files:
             mime = f.get("mimeType", "").lower()
             fname = f.get("name", "").lower()
-            if "spreadsheet" in mime or "sheet" in mime or fname.endswith((".xlsx", ".xls", ".csv")):
+            if mime == "application/vnd.google-apps.folder" or "folder" in mime:
+                type_label = "Folder"
+                default_link = f"https://drive.google.com/drive/folders/{f.get('id')}"
+            elif "spreadsheet" in mime or "sheet" in mime or fname.endswith((".xlsx", ".xls", ".csv")):
                 type_label = "Google Sheet"
                 default_link = f"https://docs.google.com/spreadsheets/d/{f.get('id')}/edit"
             elif "document" in mime or "word" in mime or fname.endswith((".docx", ".doc", ".pdf", ".txt")):

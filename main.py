@@ -812,8 +812,8 @@ def extract_custom_title(prompt: str) -> Optional[str]:
 
 def detect_google_workspace_query(prompt: str) -> Optional[Dict[str, Any]]:
     """
-    Detect if user's natural language query asks to list, search, or inspect
-    connected Google Drive files, Google Sheets, or Google Docs.
+    Detect if user's natural language query asks an informational, listing, searching,
+    or counting question about connected Google Drive files, Google Sheets, Google Docs, or folders.
     Never locks onto or defaults to 'Momento Sheet' or template files.
     """
     p = prompt.lower().strip()
@@ -822,20 +822,55 @@ def detect_google_workspace_query(prompt: str) -> Optional[Dict[str, Any]]:
     if should_trigger_google_export(prompt):
         return None
 
-    # Sheets search/list/inspect: e.g. "what sheets in google do i have", "show my google spreadsheets"
-    sheets_pattern = r"\b(what|list|show|find|search|get|see|display|check|view|open|read|inspect|browse|examine)\b.*\b(sheets?|spreadsheets?)\b"
-    if re.search(sheets_pattern, p) or ("sheets" in p and any(k in p for k in ["google", "drive", "my", "account"])):
-        return {"action": "list_files", "file_type": "sheet", "query": None}
+    # Exclude local file references (e.g. "this document", "this word document", "attached document")
+    if re.search(r"\bthis\s+(?:word\s+)?(?:document|doc|file|pdf|sheet|spreadsheet)\b", p) or "attached" in p:
+        return None
 
-    # Docs search/list/inspect: e.g. "what docs do i have", "list google docs"
-    docs_pattern = r"\b(what|list|show|find|search|get|see|display|check|view|open|read|inspect|browse|examine)\b.*\b(docs?|documents?)\b"
-    if re.search(docs_pattern, p) or ("docs" in p and any(k in p for k in ["google", "drive", "my", "account"])):
-        return {"action": "list_files", "file_type": "doc", "query": None}
+    is_count_query = bool(re.search(r"\b(?:how\s+many|count|number\s+of|total\s+(?:number\s+of\s+)?)\b", p))
+    query_intent_pattern = r"\b(?:what|which|where|list|show|find|search|get|see|display|check|view|open|read|inspect|browse|examine|how\s+many|count|number\s+of|do\s+i\s+have|are\s+there|any)\b"
 
-    # General Google Drive search/list/inspect: e.g. "what files do i have in google drive", "search drive"
+    # Helper for workspace ownership keywords
+    has_workspace_kw = bool(re.search(r"\b(google|drive|my|our|account)\b", p))
+
+    # 1. Folders search/list/count: e.g. "how many google sheet folders do i have", "show my drive folders"
+    if re.search(r"\bfolders?\b", p):
+        if re.search(query_intent_pattern, p) or has_workspace_kw or any(k in p for k in ["sheet", "doc"]):
+            return {
+                "action": "count_files" if is_count_query else "list_files",
+                "file_type": "folder",
+                "is_count": is_count_query,
+                "query": None
+            }
+
+    # 2. Sheets search/list/count/inspect: e.g. "what sheets do I have", "how many sheets do i have", "show my google spreadsheets"
+    sheets_pattern = rf"{query_intent_pattern}.*\b(sheets?|spreadsheets?)\b"
+    if re.search(sheets_pattern, p) or (re.search(r"\b(sheets?|spreadsheets?)\b", p) and has_workspace_kw):
+        return {
+            "action": "count_files" if is_count_query else "list_files",
+            "file_type": "sheet",
+            "is_count": is_count_query,
+            "query": None
+        }
+
+    # 3. Docs search/list/count/inspect: e.g. "what docs do i have", "how many google docs do i have", "list google docs"
+    docs_pattern = rf"{query_intent_pattern}.*\b(docs?|documents?)\b"
+    if re.search(docs_pattern, p) or (re.search(r"\b(docs?|documents?)\b", p) and has_workspace_kw):
+        return {
+            "action": "count_files" if is_count_query else "list_files",
+            "file_type": "doc",
+            "is_count": is_count_query,
+            "query": None
+        }
+
+    # 4. General Google Drive search/list/count/inspect: e.g. "what files do i have in google drive", "how many files in drive", "search drive"
     drive_pattern = r"\b(google drive|my drive|in drive|on drive)\b"
-    if re.search(drive_pattern, p) and any(k in p for k in ["what", "list", "show", "find", "search", "get", "see", "files", "view", "open", "check"]):
-        return {"action": "list_files", "file_type": None, "query": None}
+    if re.search(drive_pattern, p) and (re.search(query_intent_pattern, p) or any(k in p for k in ["files", "items"])):
+        return {
+            "action": "count_files" if is_count_query else "list_files",
+            "file_type": None,
+            "is_count": is_count_query,
+            "query": None
+        }
 
     return None
 
@@ -970,15 +1005,20 @@ def execute_gemini_transformation(
                         text_out = f"### [Tool Request: {p.function_call.name}]\n\n```json\n{json.dumps(call_args, indent=2)}\n```"
                         break
 
-        # Fallback 3: Clean informative synthesis so it never returns an empty error
+        # Fallback 3: Clean natural response (never render a generic data table for informational queries)
         if not text_out or not text_out.strip():
-            text_out = (
-                f"### Analysis & Results for: {user_prompt}\n\n"
-                f"Generated research data and compiled documentation for your request.\n\n"
-                f"| Item | Description | Status |\n"
-                f"|---|---|---|\n"
-                f"| Task | {user_prompt[:50]} | Ready |\n"
-            )
+            wants_table = bool(re.search(r"\b(?:table|spreadsheet|excel|csv|matrix|grid)\b", user_prompt, re.IGNORECASE))
+            if google_context:
+                text_out = f"Based on your connected Google Workspace account:\n\n{google_context.strip()}"
+            elif wants_table:
+                text_out = (
+                    f"### Summary for: {user_prompt}\n\n"
+                    f"| Task | Status |\n"
+                    f"|---|---|\n"
+                    f"| {user_prompt[:50]} | Completed |\n"
+                )
+            else:
+                text_out = f"I processed your request regarding '{user_prompt}'. Please let me know if you would like me to list, inspect, or manage any specific files."
 
         return text_out
     except Exception as e:
@@ -1943,9 +1983,19 @@ async def process_chat_query(
     if google_query:
         file_type = google_query.get("file_type")
         tool_res = list_google_drive_files(file_type=file_type, query=google_query.get("query"))
+        is_count = google_query.get("is_count", False)
+        target_label = "Google Sheets" if file_type == "sheet" else ("Google Docs" if file_type == "doc" else ("Drive Folders" if file_type == "folder" else "Drive Files"))
         if tool_res.get("success"):
             files_found = tool_res.get("files", [])
-            if files_found:
+            count = len(files_found)
+            if is_count:
+                google_tool_context = (
+                    f"### [Tool: Google Drive Count Result]\n"
+                    f"Target Type: {target_label}\n"
+                    f"Total Count Found: {count}\n"
+                    f"Guidance: Answer the user's counting question directly and naturally in plain text with the real count ({count} {target_label}). Do NOT generate a table."
+                )
+            elif files_found:
                 formatted_files = []
                 for f in files_found:
                     name = f.get("name")
@@ -1958,14 +2008,14 @@ async def process_chat_query(
                     )
                 google_tool_context = (
                     f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
-                    f"Target File Type: {file_type or 'All Drive Files'}\n"
-                    f"Results Found ({len(files_found)}):\n" + "\n".join(formatted_files)
+                    f"Target File Type: {target_label}\n"
+                    f"Results Found ({count}):\n" + "\n".join(formatted_files)
                 )
             else:
                 google_tool_context = (
                     f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
-                    f"Target File Type: {file_type or 'All Drive Files'}\n"
-                    f"Search succeeded, but 0 {file_type or ''} files were found in the connected Google Drive account."
+                    f"Target File Type: {target_label}\n"
+                    f"Search succeeded, but 0 {target_label} were found in the connected Google Drive account."
                 )
         else:
             google_tool_context = f"[Tool Error from drive.files.list: {tool_res.get('error')}]"
@@ -1980,6 +2030,26 @@ async def process_chat_query(
         filename=file.filename if file else None,
         google_context=google_tool_context
     )
+
+    # For informational or counting queries with Google Workspace context, ensure a clean natural response
+    if google_query and tool_res and tool_res.get("success"):
+        files_found = tool_res.get("files", [])
+        is_count = google_query.get("is_count", False)
+        f_type = google_query.get("file_type")
+        generic_markers = ["no additional content was generated", "i cannot directly access", "i am an ai", "canned refusal", "i processed your request"]
+        if not result_text or any(marker in result_text.lower() for marker in generic_markers):
+            if is_count:
+                type_name = "Google Sheet" if f_type == "sheet" else ("Google Doc" if f_type == "doc" else ("folder" if f_type == "folder" else "file"))
+                cnt = len(files_found)
+                plural = "s" if cnt != 1 else ""
+                result_text = f"You have **{cnt}** {type_name}{plural} in your connected Google Drive account."
+            elif files_found:
+                label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
+                lines = [f"- **[{f['name']}]({f['link']})** (Type: `{f['type']}`{', Modified: ' + f['modified_time'][:10] if f.get('modified_time') else ''})" for f in files_found[:25]]
+                result_text = f"Here are your connected {label} in Google Drive ({len(files_found)} found):\n\n" + "\n".join(lines)
+            else:
+                label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
+                result_text = f"You currently have 0 {label} in your connected Google Drive account."
 
     # Compile output into downloadable file if a file was processed, or user requested export, or sending via Telegram
     export_file_info = None

@@ -350,3 +350,80 @@ def test_execute_gemini_transformation_handles_web_search_cleanly():
         assert config is not None
         assert config.tools is not None
 
+
+def test_detect_google_workspace_counting_and_informational_queries():
+    from main import detect_google_workspace_query, should_trigger_google_export
+
+    q1 = "how many google sheet folders do i have"
+    res1 = detect_google_workspace_query(q1)
+    assert res1 is not None
+    assert res1["action"] == "count_files"
+    assert res1["file_type"] == "folder"
+    assert res1["is_count"] is True
+    assert should_trigger_google_export(q1) is None
+
+    q2 = "what sheets do I have"
+    res2 = detect_google_workspace_query(q2)
+    assert res2 is not None
+    assert res2["action"] == "list_files"
+    assert res2["file_type"] == "sheet"
+    assert res2["is_count"] is False
+    assert should_trigger_google_export(q2) is None
+
+    q3 = "how many sheets do i have"
+    res3 = detect_google_workspace_query(q3)
+    assert res3 is not None
+    assert res3["action"] == "count_files"
+    assert res3["file_type"] == "sheet"
+    assert res3["is_count"] is True
+
+    q4 = "how many google docs do i have"
+    res4 = detect_google_workspace_query(q4)
+    assert res4 is not None
+    assert res4["action"] == "count_files"
+    assert res4["file_type"] == "doc"
+    assert res4["is_count"] is True
+
+
+def test_informational_query_returns_clean_natural_response_not_table():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    with patch("main.is_google_authenticated", return_value={"authenticated": True}):
+        # 1. Counting query
+        with patch("main.list_google_drive_files") as mock_list, \
+             patch("main.execute_gemini_transformation", return_value="You have 3 folders in your connected Google Drive account."):
+            mock_list.return_value = {
+                "success": True,
+                "count": 3,
+                "files": [
+                    {"name": "Folder A", "type": "Folder", "link": "http://fa", "modified_time": "2026-09-01"},
+                    {"name": "Folder B", "type": "Folder", "link": "http://fb", "modified_time": "2026-09-02"},
+                    {"name": "Folder C", "type": "Folder", "link": "http://fc", "modified_time": "2026-09-03"}
+                ]
+            }
+            res = client.post("/api/process", data={"prompt": "how many google sheet folders do i have"})
+            assert res.status_code == 200
+            data = res.json()
+            assert "3" in data["result"]
+            assert "Generated research data and compiled documentation" not in data["result"]
+            assert "| Item | Description |" not in data["result"]
+
+        # 2. Listing query
+        with patch("main.list_google_drive_files") as mock_list, \
+             patch("main.execute_gemini_transformation", return_value="Here are your Google Sheets:\n- [Sales](http://s1)"):
+            mock_list.return_value = {
+                "success": True,
+                "count": 1,
+                "files": [
+                    {"name": "Sales", "type": "Google Sheet", "link": "http://s1", "modified_time": "2026-09-01"}
+                ]
+            }
+            res2 = client.post("/api/process", data={"prompt": "what sheets do I have"})
+            assert res2.status_code == 200
+            data2 = res2.json()
+            assert "Sales" in data2["result"]
+            assert "Generated research data and compiled documentation" not in data2["result"]
+            assert "| Item | Description |" not in data2["result"]
+
