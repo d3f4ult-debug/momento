@@ -124,7 +124,7 @@ def parse_text_to_matrix(text: str) -> List[List[str]]:
     if table_rows:
         return table_rows
 
-    # Fallback: check CSV format or split into rows
+    # Fallback: check CSV format, tab-delimited, key-value pairs, or split into rows
     for line in lines:
         line_str = line.strip()
         if not line_str:
@@ -133,6 +133,14 @@ def parse_text_to_matrix(text: str) -> List[List[str]]:
             table_rows.append([c.strip() for c in line_str.split(",")])
         elif "\t" in line_str:
             table_rows.append([c.strip() for c in line_str.split("\t")])
+        elif ":" in line_str and not line_str.lower().startswith(("http://", "https://", "###", "##", "#")):
+            clean_kv = line_str.lstrip("-*• ").strip()
+            if ":" in clean_kv:
+                parts = [p.strip() for p in clean_kv.split(":", 1)]
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    table_rows.append(parts)
+                    continue
+            table_rows.append([line_str])
         else:
             table_rows.append([line_str])
 

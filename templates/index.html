@@ -1169,6 +1169,7 @@
 
         let currentActiveTgChat = null;
         let tgViewerAttachedFile = null;
+        let activeChatHistory = [];
 
         // Floating Telegram Context Menu Elements
         const tgContextMenu = document.getElementById('tg-context-menu');
@@ -1803,6 +1804,7 @@
             pendingPromptExecution = null;
 
             // Clear chat stream and hide it
+            activeChatHistory = [];
             chatStream.innerHTML = '';
             chatStream.classList.add('hidden');
 
@@ -2710,9 +2712,11 @@
         // Viewport Header Controls
         if (viewportClearChatBtn) {
             viewportClearChatBtn.addEventListener('click', () => {
+                activeChatHistory = [];
                 chatStream.innerHTML = '';
                 chatStream.classList.add('hidden');
                 emptyState.classList.remove('hidden');
+                fetch('/api/session/reset', { method: 'POST' }).catch(() => {});
             });
         }
 
@@ -2890,6 +2894,10 @@
                 formData.append('file', file);
             }
 
+            if (activeChatHistory && activeChatHistory.length > 0) {
+                formData.append('chat_history', JSON.stringify(activeChatHistory.slice(-10)));
+            }
+
             if (isTelegramActive) {
                 formData.append('send_telegram', 'true');
                 formData.append('send_to_telegram', 'true');
@@ -2960,6 +2968,9 @@
 
         // Bubble Helpers
         function appendUserBubble(promptText, file) {
+            if (promptText) {
+                activeChatHistory.push({ role: 'user', content: promptText });
+            }
             const userMsg = document.createElement('div');
             userMsg.className = 'flex justify-end';
 
@@ -3002,6 +3013,9 @@
             // Resolve full markdown response stream supporting data.result, response.content, response.answer, etc.
             const respObj = data.response || data;
             const rawResult = data.result || respObj.content || respObj.answer || respObj.result || (tgMgmt && (tgMgmt.content || tgMgmt.answer || tgMgmt.summary)) || '';
+            if (rawResult) {
+                activeChatHistory.push({ role: 'assistant', content: rawResult });
+            }
             const parsedHtml = rawResult ? marked.parse(rawResult) : '';
 
             let telegramBadge = '';

@@ -427,3 +427,97 @@ def test_informational_query_returns_clean_natural_response_not_table():
             assert "Generated research data and compiled documentation" not in data2["result"]
             assert "| Item | Description |" not in data2["result"]
 
+
+def test_multi_turn_followup_confirmation_and_title_resolution():
+    from main import should_trigger_google_export, extract_custom_title, is_followup_confirmation
+
+    # Assert helper detects affirmatives and confirmations
+    assert is_followup_confirmation("yes create that") is True
+    assert is_followup_confirmation("do it") is True
+    assert is_followup_confirmation("sure go ahead") is True
+    assert is_followup_confirmation("proceed") is True
+    assert is_followup_confirmation("check my google sheet") is False
+
+    history_sheet = [
+        {"role": "user", "content": "can u create a sheet with iphone specs"},
+        {"role": "assistant", "content": "I can create a Google Sheet for iPhone specs. Would you like me to proceed?"}
+    ]
+
+    # Turn 2: "yes create that"
+    assert should_trigger_google_export("yes create that", history_sheet) == "sheets"
+    title1 = extract_custom_title("yes create that", history_sheet)
+    assert title1 is not None
+    assert "iphone specs" in title1.lower()
+
+    # Turn 2: "do it"
+    assert should_trigger_google_export("do it", history_sheet) == "sheets"
+
+    # Turn 2: Providing custom title
+    assert should_trigger_google_export("name it iPhone 16 Specs", history_sheet) == "sheets"
+    assert extract_custom_title("name it iPhone 16 Specs", history_sheet) == "iPhone 16 Specs"
+
+    # Turn 2: Document confirmation
+    history_doc = [
+        {"role": "user", "content": "can you create a doc summarizing AI trends"},
+        {"role": "assistant", "content": "I can create a Google Doc summarizing AI trends. Should I generate it now?"}
+    ]
+    assert should_trigger_google_export("yes please", history_doc) == "docs"
+    title_doc = extract_custom_title("yes please", history_doc)
+    assert title_doc is not None
+    assert "ai trends" in title_doc.lower()
+
+
+def test_multi_turn_creation_endpoint_executes_tool_without_questionnaire_loop():
+    import json
+    from fastapi.testclient import TestClient
+    from main import app, clear_session_chat_history
+    client = TestClient(app)
+
+    clear_session_chat_history()
+
+    sample_table = (
+        "| Model | Display | Processor | Price |\n"
+        "|---|---|---|---|\n"
+        "| iPhone 16 Pro | 6.3 OLED | A18 Pro | $999 |\n"
+        "| iPhone 16 Pro Max | 6.9 OLED | A18 Pro | $1199 |"
+    )
+
+    with patch("main.is_google_authenticated", return_value={"authenticated": True}), \
+         patch("main.create_google_sheet") as mock_create_sheet, \
+         patch("main.execute_gemini_transformation", return_value=sample_table) as mock_gemini:
+
+        mock_create_sheet.return_value = {
+            "success": True,
+            "spreadsheet_id": "test-sheet-id",
+            "url": "https://docs.google.com/spreadsheets/d/test-sheet-id/edit",
+            "title": "iPhone Specs - Spreadsheet",
+            "rows_written": 2
+        }
+
+        # Follow-up confirmation with client-provided chat history
+        chat_hist = [
+            {"role": "user", "content": "can u create a sheet with iphone specs"},
+            {"role": "assistant", "content": "I can create a Google Sheet for iPhone specs. Would you like me to proceed?"}
+        ]
+
+        response = client.post("/api/process", data={
+            "prompt": "yes create that",
+            "chat_history": json.dumps(chat_hist)
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        # Tool execution must have occurred immediately
+        assert mock_create_sheet.called
+        # Verify creation banner and link are rendered
+        assert "Google Sheet Created" in data["result"]
+        assert "https://docs.google.com/spreadsheets/d/test-sheet-id/edit" in data["result"]
+        # Verify no questionnaire questions
+        assert "what kind of file" not in data["result"].lower()
+        # Verify gemini was called with creation directives and conversation history
+        call_kwargs = mock_gemini.call_args[1]
+        assert call_kwargs.get("creation_export_type") == "sheets"
+        assert call_kwargs.get("chat_history") is not None
+
+
