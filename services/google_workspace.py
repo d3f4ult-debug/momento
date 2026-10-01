@@ -71,7 +71,10 @@ def get_google_credentials():
 
         creds = None
         if os.path.exists(TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            try:
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE)
+            except Exception:
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -269,9 +272,9 @@ def list_google_drive_files(
 
         type_lower = (file_type or "").lower().strip()
         if type_lower in ["sheet", "sheets", "spreadsheet", "spreadsheets"]:
-            query_parts.append("mimeType = 'application/vnd.google-apps.spreadsheet'")
+            query_parts.append("(mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType = 'application/vnd.ms-excel' or mimeType = 'text/csv')")
         elif type_lower in ["doc", "docs", "document", "documents"]:
-            query_parts.append("mimeType = 'application/vnd.google-apps.document'")
+            query_parts.append("(mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mimeType = 'application/pdf' or mimeType = 'text/plain')")
 
         if query and query.strip():
             safe_q = query.strip()
@@ -284,25 +287,65 @@ def list_google_drive_files(
 
         q_str = " and ".join(query_parts)
 
+        # Primary listing attempt with formatted filters
         results = drive_service.files().list(
             q=q_str,
             pageSize=page_size,
             fields="files(id, name, mimeType, webViewLink, modifiedTime, size)",
-            orderBy="modifiedTime desc"
+            orderBy="modifiedTime desc",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
 
         raw_files = results.get("files", [])
+
+        # Broad listing fallback: if specific filter or mimeType yields 0 files,
+        # query broadly for all non-trashed files so existing user files are always retrieved
+        if not raw_files and (type_lower or (query and query.strip())):
+            try:
+                fallback_res = drive_service.files().list(
+                    q="trashed = false",
+                    pageSize=page_size,
+                    fields="files(id, name, mimeType, webViewLink, modifiedTime, size)",
+                    orderBy="modifiedTime desc",
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True
+                ).execute()
+                fallback_files = fallback_res.get("files", [])
+                if fallback_files:
+                    if type_lower in ["sheet", "sheets", "spreadsheet", "spreadsheets"]:
+                        matching = [
+                            f for f in fallback_files
+                            if "spreadsheet" in f.get("mimeType", "").lower()
+                            or "sheet" in f.get("mimeType", "").lower()
+                            or f.get("name", "").lower().endswith((".xlsx", ".xls", ".csv"))
+                        ]
+                        raw_files = matching if matching else fallback_files
+                    elif type_lower in ["doc", "docs", "document", "documents"]:
+                        matching = [
+                            f for f in fallback_files
+                            if "document" in f.get("mimeType", "").lower()
+                            or "word" in f.get("mimeType", "").lower()
+                            or f.get("name", "").lower().endswith((".docx", ".doc", ".pdf", ".txt"))
+                        ]
+                        raw_files = matching if matching else fallback_files
+                    else:
+                        raw_files = fallback_files
+            except Exception:
+                pass
+
         formatted_files = []
         for f in raw_files:
-            mime = f.get("mimeType", "")
-            if "spreadsheet" in mime:
+            mime = f.get("mimeType", "").lower()
+            fname = f.get("name", "").lower()
+            if "spreadsheet" in mime or "sheet" in mime or fname.endswith((".xlsx", ".xls", ".csv")):
                 type_label = "Google Sheet"
                 default_link = f"https://docs.google.com/spreadsheets/d/{f.get('id')}/edit"
-            elif "document" in mime:
+            elif "document" in mime or "word" in mime or fname.endswith((".docx", ".doc", ".pdf", ".txt")):
                 type_label = "Google Doc"
                 default_link = f"https://docs.google.com/document/d/{f.get('id')}/edit"
             else:
-                type_label = mime
+                type_label = f.get("mimeType", "File")
                 default_link = f.get("webViewLink", "")
 
             formatted_files.append({

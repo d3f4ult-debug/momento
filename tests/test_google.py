@@ -285,3 +285,68 @@ def test_no_sheet_created_on_workspace_search_query():
         mock_create_sheet.assert_not_called()
         mock_create_doc.assert_not_called()
 
+
+def test_list_google_drive_files_broad_fallback_when_filtered_empty():
+    from services.google_workspace import list_google_drive_files
+
+    mock_drive = MagicMock()
+    # First call (specific mimeType filter) returns empty
+    # Second call (broad fallback trashed = false) returns real files
+    mock_drive.files().list().execute.side_effect = [
+        {"files": []},
+        {
+            "files": [
+                {
+                    "id": "broad_sheet_99",
+                    "name": "Company Budget.xlsx",
+                    "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "webViewLink": "https://docs.google.com/spreadsheets/d/broad_sheet_99/edit",
+                    "modifiedTime": "2026-09-30T10:00:00Z"
+                }
+            ]
+        }
+    ]
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_drive):
+            res = list_google_drive_files(file_type="sheet")
+            assert res["success"] is True
+            assert res["count"] == 1
+            assert res["files"][0]["name"] == "Company Budget.xlsx"
+            assert res["files"][0]["type"] == "Google Sheet"
+
+
+def test_should_trigger_google_export_natural_creation_and_title():
+    from main import should_trigger_google_export, extract_custom_title
+
+    prompt = "create new one name it iphone prices and search google for current prices"
+    assert should_trigger_google_export(prompt) == "sheets"
+    assert extract_custom_title(prompt) == "iphone prices"
+
+    prompt_doc = "create a new doc titled 'Meeting Minutes' and search web"
+    assert should_trigger_google_export(prompt_doc) == "docs"
+    assert extract_custom_title(prompt_doc) == "Meeting Minutes"
+
+
+def test_execute_gemini_transformation_handles_web_search_cleanly():
+    from main import execute_gemini_transformation
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "| Model | Price |\n|---|---|\n| iPhone 16 | $799 |"
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with patch("google.genai.Client", return_value=mock_client):
+        res = execute_gemini_transformation(
+            api_key="test_key",
+            model_name="gemini-2.5-flash",
+            system_instruction="System prompt",
+            user_prompt="create new one name it iphone prices and search google for current prices"
+        )
+        assert "| iPhone 16 | $799 |" in res
+        # Verify tools was passed with google_search
+        call_kwargs = mock_client.models.generate_content.call_args.kwargs
+        config = call_kwargs.get("config")
+        assert config is not None
+        assert config.tools is not None
+
