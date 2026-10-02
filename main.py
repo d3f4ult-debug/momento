@@ -48,6 +48,12 @@ from services.google_workspace import (
     save_oauth_code,
     list_google_drive_files,
     read_google_sheet,
+    find_google_drive_file,
+    append_to_google_sheet,
+    update_google_sheet,
+    append_to_google_doc,
+    update_google_doc,
+    parse_text_to_matrix,
     ensure_google_client_secrets_file,
 )
 from services.file_exporter import (
@@ -356,7 +362,9 @@ def is_followup_confirmation(prompt: str) -> bool:
         "yes", "yeah", "yep", "sure", "ok", "okay", "yup", "do it", "do that",
         "proceed", "go ahead", "confirm", "confirmed", "please do", "yes please",
         "create it", "create that", "make it", "make that", "build it", "build that",
-        "yes create that", "yes create it", "yes do it", "yes make it", "yes build it",
+        "update it", "update that", "yes update that", "yes update it", "sure update it",
+        "add it", "add that", "yes add that", "yes add it", "append it", "append that",
+        "yes append that", "yes create that", "yes create it", "yes do it", "yes make it", "yes build it",
         "sure create it", "sure create that", "sure do it", "ok create it", "ok do it",
         "okay create it", "okay do it", "please create that", "please create it",
         "yes please create that", "yes please do it", "yes please create it",
@@ -369,11 +377,11 @@ def is_followup_confirmation(prompt: str) -> bool:
         return True
 
     confirmation_patterns = [
-        r"^(?:yes|yeah|yep|sure|ok|okay|please|definitely|absolutely)\b.*?\b(?:create|make|build|generate|export|do)\s+(?:it|that|this|one|sheet|doc|spreadsheet|document)\b",
-        r"\b(?:create|make|build|generate|export|do)\s+(?:it|that|this|one)\b",
-        r"^(?:yes|yeah|sure|ok|okay|please)\s*,\s*(?:please\s+)?(?:go\s+ahead|proceed|do\s+it|create\s+it|make\s+it)\b",
-        r"\b(?:go\s+ahead|proceed\s+with\s+(?:it|that|creation)|let's\s+do\s+it)\b",
-        r"^(?:yes|yeah|sure|ok|okay|yep)\s+(?:create|make|build|do)\b"
+        r"^(?:yes|yeah|yep|sure|ok|okay|please|definitely|absolutely)\b.*?\b(?:create|make|build|generate|export|do|update|append|add|modify)\s+(?:it|that|this|one|sheet|doc|spreadsheet|document)\b",
+        r"\b(?:create|make|build|generate|export|do|update|append|add|modify)\s+(?:it|that|this|one)\b",
+        r"^(?:yes|yeah|sure|ok|okay|please)\s*,\s*(?:please\s+)?(?:go\s+ahead|proceed|do\s+it|create\s+it|make\s+it|update\s+it|add\s+it)\b",
+        r"\b(?:go\s+ahead|proceed\s+with\s+(?:it|that|creation|update)|let's\s+do\s+it)\b",
+        r"^(?:yes|yeah|sure|ok|okay|yep)\s+(?:create|make|build|do|update|add|append)\b"
     ]
     return any(re.search(pat, p_clean) for pat in confirmation_patterns)
 
@@ -797,11 +805,144 @@ def detect_telegram_management_intent(prompt: str, has_file: bool = False) -> Op
     return None
 
 
+def find_pending_or_prior_edit_context(chat_history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Scan chat history for prior file edit/update context when user confirms."""
+    for msg in reversed(chat_history[-6:]):
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "user":
+            edit_ctx = detect_google_workspace_edit_intent(content)
+            if edit_ctx:
+                return edit_ctx
+        elif role == "assistant":
+            # Check if assistant mentioned finding or proposing to edit a sheet or doc
+            m_sheet = re.search(r"\[([^\n\r\]]+)\]\(https://docs\.google\.com/spreadsheets/d/([^/)]+)", content)
+            if m_sheet:
+                return {
+                    "action": "append",
+                    "target_file_name": m_sheet.group(1),
+                    "file_type": "sheet",
+                    "file_id": m_sheet.group(2)
+                }
+            m_doc = re.search(r"\[([^\n\r\]]+)\]\(https://docs\.google\.com/document/d/([^/)]+)", content)
+            if m_doc:
+                return {
+                    "action": "append",
+                    "target_file_name": m_doc.group(1),
+                    "file_type": "doc",
+                    "file_id": m_doc.group(2)
+                }
+    return None
+
+
+def detect_google_workspace_edit_intent(
+    prompt: str,
+    chat_history: Optional[List[Dict[str, Any]]] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Detect if the user's natural language instruction requests modifying, appending to,
+    or updating an existing Google Drive file (Google Sheet or Google Doc).
+    Supports direct edit commands and multi-turn follow-up confirmations.
+    """
+    if not prompt:
+        return None
+
+    p = prompt.strip()
+    p_lower = p.lower()
+
+    # Reject informational/counting questions
+    if re.search(r"^(?:what|which|where|list|show|how\s+many|count|can\s+you\s+see|do\s+i\s+have)\b", p_lower):
+        return None
+
+    # Check for multi-turn confirmation first if chat history is present
+    if chat_history and is_followup_confirmation(prompt):
+        prior_edit = find_pending_or_prior_edit_context(chat_history)
+        if prior_edit:
+            return prior_edit
+
+    # Check for edit/append/update action keywords
+    edit_action_pattern = r"\b(add|append|insert|update|modify|edit|put|record)\b"
+    if not re.search(edit_action_pattern, p_lower):
+        return None
+
+    # Disallow if it's an inquiry asking whether files were already updated
+    if re.search(r"\b(?:did\s+(?:you|i)|can\s+you\s+see|check\s+if)\b", p_lower):
+        return None
+
+    # Disallow pure brand-new creation prompts like "create a new sheet", "make a sheet"
+    if re.search(r"\b(?:create|make|generate)\s+(?:a\s+)?(?:new\s+)?(?:sheet|spreadsheet|doc|document)\b", p_lower):
+        return None
+
+    # Determine action type: "append" vs "update"
+    action = "append"
+    if re.search(r"\b(update|modify|change|edit|replace)\b", p_lower) and not re.search(r"\b(add|append|insert)\b", p_lower):
+        action = "update"
+
+    # Infer file type if explicitly mentioned
+    inferred_type = None
+    if re.search(r"\b(sheets?|spreadsheets?|gsheets?)\b", p_lower):
+        inferred_type = "sheet"
+    elif re.search(r"\b(docs?|documents?|gdocs?)\b", p_lower):
+        inferred_type = "doc"
+
+    # Extract target file name
+    target_file = None
+
+    # Pattern 1: "... to/in/into/on [my/the] 'File Name' (sheet/doc)?"
+    m_target = re.search(
+        r"\b(?:to|in|into|on)\s+(?:my\s+|the\s+|our\s+)?['\"]?([^'\"\n\r,.:;]+?)['\"]?\s*(?:sheet|spreadsheet|doc|document)?\s*(?:[.:?!;]|$)",
+        p,
+        re.IGNORECASE
+    )
+    if m_target:
+        candidate = m_target.group(1).strip()
+        candidate_clean = re.sub(r"^(?:my|the|our)\s+", "", candidate, flags=re.IGNORECASE).strip()
+        candidate_clean = re.sub(r"\s+(?:sheet|spreadsheet|doc|document)$", "", candidate_clean, flags=re.IGNORECASE).strip()
+        if candidate_clean.lower() not in ("it", "this", "that", "table", "file", "drive", "google", "row", "column", "data"):
+            target_file = candidate_clean
+
+    # Pattern 2: "edit/update/modify (sheet/doc) 'File Name' ..."
+    if not target_file:
+        m_edit_start = re.search(
+            r"\b(?:edit|update|modify|append\s+to|add\s+to)\s+(?:the\s+)?(?:sheet|spreadsheet|doc|document)?\s*['\"]([^'\"]+)['\"]",
+            p,
+            re.IGNORECASE
+        )
+        if m_edit_start:
+            target_file = m_edit_start.group(1).strip()
+
+    # Pattern 3: "edit/update/modify (the )?(sheet/doc/file) [File Name] ..."
+    if not target_file:
+        m_edit_named = re.search(
+            r"\b(?:edit|update|modify|append\s+to|add\s+to)\s+(?:the\s+)?(?:sheet|spreadsheet|doc|document|file)\s+([A-Za-z0-9_\-\s]+?)(?:\s+(?:and|with|to|by)|[.:?!;]|$)",
+            p,
+            re.IGNORECASE
+        )
+        if m_edit_named:
+            cand = m_edit_named.group(1).strip()
+            if cand.lower() not in ("it", "this", "that", "row", "cells", "data"):
+                target_file = cand
+
+    if target_file:
+        return {
+            "action": action,
+            "target_file_name": target_file,
+            "file_type": inferred_type,
+            "prompt": prompt
+        }
+
+    return None
+
+
 def _check_direct_creation_intent(prompt: str) -> Optional[str]:
     """Detect direct explicit creation directive in a single prompt."""
     if not prompt:
         return None
     p_lower = prompt.lower().strip()
+
+    # Exclude edit/update intents from triggering new creation
+    if detect_google_workspace_edit_intent(prompt):
+        return None
 
     # Require explicit creation or export directives
     explicit_create_patterns = [
@@ -840,10 +981,15 @@ def should_trigger_google_export(prompt: str, chat_history: Optional[List[Dict[s
         return None
     p_lower = prompt.lower().strip()
 
+    # Guard: An edit or append intent must NEVER trigger creation of a new sheet or doc
+    if detect_google_workspace_edit_intent(prompt, chat_history):
+        return None
+
     # 1. Direct creation directive in current prompt
     direct_type = _check_direct_creation_intent(prompt)
     if direct_type:
         return direct_type
+
 
     # An informational / inspection query must NEVER be treated as a follow-up creation confirmation
     info_pattern = r"\b(?:what|which|where|list|show|find|search|check|view|open|read|inspect|browse|examine|how\s+many|count|do\s+i\s+have|are\s+there)\b"
@@ -1055,6 +1201,10 @@ def detect_google_workspace_query(prompt: str, chat_history: Optional[List[Dict[
 
     # Exclude explicit creation/export requests from being treated solely as read/list queries
     if should_trigger_google_export(prompt, chat_history):
+        return None
+
+    # Exclude edit/update/append requests from being treated as read/list queries
+    if detect_google_workspace_edit_intent(prompt, chat_history):
         return None
 
     # Exclude local file references (e.g. "this document", "this word document", "attached document")
@@ -2243,7 +2393,156 @@ async def process_chat_query(
     # Normalize full recent chat history from client or active session
     normalized_history = normalize_chat_history(chat_history)
 
-    # 2. Google Workspace Intent & Export Guard (with Multi-turn Awareness)
+    # 2. Google Workspace Edit / Append Intent (Priority over new creation)
+    edit_intent = detect_google_workspace_edit_intent(prompt, normalized_history)
+    if edit_intent:
+        auth_status = is_google_authenticated()
+        if not auth_status.get("authenticated"):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "status": "auth_required",
+                    "auth_code": "AUTH_REQUIRED_GOOGLE",
+                    "service": "google",
+                    "message": "Google Workspace authentication required. Please connect your Google account in settings to modify existing files."
+                }
+            )
+
+        target_file_name = edit_intent.get("target_file_name")
+        target_file_type = edit_intent.get("file_type")
+        found_file = find_google_drive_file(target_file_name, file_type=target_file_type)
+
+        if not found_file:
+            # File search failed, suggest recent files
+            drive_res = list_google_drive_files(file_type=target_file_type, page_size=10)
+            recent = drive_res.get("files", []) if drive_res.get("success") else []
+            suggestions = ""
+            if recent:
+                suggestions = "\n\n**Here are your recent files:**\n" + "\n".join(
+                    [f"- **[{f['name']}]({f['link']})** ({f['type']})" for f in recent[:5]]
+                )
+            msg = f"Could not find an existing Google Drive file matching **'{target_file_name}'**.{suggestions}"
+            add_to_session_chat_history("user", prompt)
+            add_to_session_chat_history("assistant", msg)
+            return {
+                "status": "success",
+                "model": raw_model,
+                "model_name": model_display_name,
+                "effective_model": effective_model,
+                "elapsed_seconds": round(time.time() - start_time, 2),
+                "file": file_metadata,
+                "result": msg,
+                "suppress_text_dump": False,
+                "export_file": None,
+                "integrations": {
+                    "telegram": None,
+                    "telegram_management": None,
+                    "google_export": None,
+                    "google_edit": {"success": False, "error": f"File '{target_file_name}' not found."}
+                }
+            }
+
+        # File located!
+        file_id = found_file["id"]
+        file_title = found_file["name"]
+        file_link = found_file["link"]
+        is_sheet = "sheet" in found_file.get("type", "").lower() or "spreadsheet" in found_file.get("type", "").lower()
+
+        if is_sheet:
+            sheet_info = read_google_sheet(file_id)
+            headers = sheet_info.get("headers", [])
+            existing_rows = sheet_info.get("values", [])
+
+            edit_context = (
+                f"### [Tool: Existing Google Sheet Content (`sheets.spreadsheets.values.get`)]\n"
+                f"Target File: {file_title} (ID: `{file_id}`)\n"
+                f"Existing Columns/Headers: {json.dumps(headers)}\n"
+                f"Recent Sample Rows: {json.dumps(existing_rows[-3:] if existing_rows else [])}\n\n"
+                f"CRITICAL DIRECTIVE: The user wants to update or append to this spreadsheet. "
+                f"Generate ONLY the row(s) to append or update in Markdown table format, "
+                f"matching the columns {json.dumps(headers)}. "
+                f"Do NOT output setup questionnaires, explanations, or conversational filler."
+            )
+
+            result_text = execute_gemini_transformation(
+                api_key=effective_api_key,
+                model_name=effective_model,
+                system_instruction=system_instruction,
+                user_prompt=prompt,
+                file_content=extracted_text,
+                filename=file.filename if file else None,
+                google_context=edit_context,
+                chat_history=normalized_history,
+                creation_export_type="sheets",
+                target_title=file_title
+            )
+
+            append_res = append_to_google_sheet(file_id, raw_text=result_text)
+            rows_w = append_res.get("rows_appended", 1) if append_res.get("success") else 0
+
+            display_result = (
+                f"### 📊 Google Sheet Updated: [{file_title}]({file_link})\n\n"
+                f"✅ Successfully updated **{file_title}** in your Google Drive ({rows_w} row(s) appended).\n"
+                f"🔗 **[Open in Google Sheets]({file_link})**\n\n"
+                f"---\n\n"
+                f"{result_text}"
+            )
+            edit_res = append_res
+        else:
+            # Google Doc
+            edit_context = (
+                f"### [Tool: Existing Google Doc (`docs.documents.get`)]\n"
+                f"Target File: {file_title} (ID: `{file_id}`)\n\n"
+                f"CRITICAL DIRECTIVE: The user wants to append or update content in this document. "
+                f"Generate the exact structured text, section, or notes requested. "
+                f"Do NOT output setup questionnaires or conversational filler."
+            )
+
+            result_text = execute_gemini_transformation(
+                api_key=effective_api_key,
+                model_name=effective_model,
+                system_instruction=system_instruction,
+                user_prompt=prompt,
+                file_content=extracted_text,
+                filename=file.filename if file else None,
+                google_context=edit_context,
+                chat_history=normalized_history,
+                creation_export_type="docs",
+                target_title=file_title
+            )
+
+            append_res = append_to_google_doc(file_id, result_text)
+            display_result = (
+                f"### 📄 Google Doc Updated: [{file_title}]({file_link})\n\n"
+                f"✅ Successfully updated document in your Google Drive.\n"
+                f"🔗 **[Open in Google Docs]({file_link})**\n\n"
+                f"---\n\n"
+                f"{result_text}"
+            )
+            edit_res = append_res
+
+        add_to_session_chat_history("user", prompt)
+        add_to_session_chat_history("assistant", display_result)
+
+        return {
+            "status": "success",
+            "model": raw_model,
+            "model_name": model_display_name,
+            "effective_model": effective_model,
+            "elapsed_seconds": round(time.time() - start_time, 2),
+            "file": file_metadata,
+            "result": display_result,
+            "suppress_text_dump": False,
+            "export_file": None,
+            "integrations": {
+                "telegram": None,
+                "telegram_management": None,
+                "google_export": None,
+                "google_edit": edit_res
+            }
+        }
+
+    # 3. Google Workspace Intent & Export Guard (with Multi-turn Awareness)
     export_type = should_trigger_google_export(prompt, normalized_history)
     google_query = detect_google_workspace_query(prompt, normalized_history) if not export_type else None
 
@@ -2544,6 +2843,71 @@ async def trigger_sheets_export(title: str = Form(...), content: str = Form(...)
 async def google_files_endpoint(type: Optional[str] = None, q: Optional[str] = None):
     """Search or list connected Google Drive files (sheets, docs, etc.)."""
     return list_google_drive_files(file_type=type, query=q)
+
+
+@app.post("/api/google/sheets/append")
+async def google_sheets_append_endpoint(
+    file_id: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    content: str = Form(...)
+):
+    """Append row(s) to an existing Google Spreadsheet by ID or title."""
+    effective_id = file_id
+    if not effective_id and title:
+        found = find_google_drive_file(title, file_type="sheet")
+        if found:
+            effective_id = found.get("id")
+    if not effective_id:
+        return {"success": False, "error": f"Spreadsheet '{title or file_id}' not found."}
+    return append_to_google_sheet(effective_id, raw_text=content)
+
+
+@app.post("/api/google/sheets/update")
+async def google_sheets_update_endpoint(
+    file_id: str = Form(...),
+    range_name: str = Form(...),
+    values: str = Form(...)
+):
+    """Update a specific range in an existing Google Sheet."""
+    try:
+        parsed_vals = json.loads(values) if values.strip().startswith("[") else parse_text_to_matrix(values)
+    except Exception:
+        parsed_vals = parse_text_to_matrix(values)
+    return update_google_sheet(file_id, range_name=range_name, values=parsed_vals)
+
+
+@app.post("/api/google/docs/append")
+async def google_docs_append_endpoint(
+    file_id: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    content: str = Form(...)
+):
+    """Append text/section to an existing Google Document by ID or title."""
+    effective_id = file_id
+    if not effective_id and title:
+        found = find_google_drive_file(title, file_type="doc")
+        if found:
+            effective_id = found.get("id")
+    if not effective_id:
+        return {"success": False, "error": f"Google Document '{title or file_id}' not found."}
+    return append_to_google_doc(effective_id, content=content)
+
+
+@app.post("/api/google/docs/update")
+async def google_docs_update_endpoint(
+    file_id: str = Form(...),
+    content: Optional[str] = Form(None),
+    replace_json: Optional[str] = Form(None)
+):
+    """Update an existing Google Document (text replacement or content append)."""
+    replace_map = None
+    if replace_json:
+        try:
+            replace_map = json.loads(replace_json)
+        except Exception:
+            pass
+    return update_google_doc(file_id, content=content, replace_map=replace_map)
+
 
 
 # ==============================================================================

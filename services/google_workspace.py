@@ -598,8 +598,72 @@ def list_google_drive_files(
         }
 
 
-def read_google_sheet(spreadsheet_id: str, range_name: str = "A1:Z50") -> Dict[str, Any]:
-    """Read cell values from a Google Spreadsheet."""
+def find_google_drive_file(
+    name: str,
+    file_type: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Search and locate an existing Google Drive file by name.
+    Scores exact match, case-insensitive match, substring match, and token overlap.
+    """
+    if not name or not name.strip():
+        return None
+
+    clean_target = name.strip().strip("'\"").strip()
+    # Strip common filler prefixes and suffixes
+    stripped_target = re.sub(
+        r"^(?:my|the|our)\s+", "", clean_target, flags=re.IGNORECASE
+    )
+    stripped_target = re.sub(
+        r"\s+(?:sheet|spreadsheet|doc|document|file)$", "", stripped_target, flags=re.IGNORECASE
+    ).strip()
+
+    search_query = stripped_target if stripped_target else clean_target
+
+    # Search Drive
+    list_res = list_google_drive_files(file_type=file_type, query=search_query, page_size=50)
+    files = list_res.get("files", []) if list_res.get("success") else []
+
+    if not files:
+        # Try broader search without query to search in-memory
+        broad_res = list_google_drive_files(file_type=file_type, page_size=50)
+        files = broad_res.get("files", []) if broad_res.get("success") else []
+
+    if not files:
+        return None
+
+    target_lower = search_query.lower()
+
+    # 1. Exact match
+    for f in files:
+        if f.get("name", "").lower() == target_lower:
+            return f
+
+    # 2. Substring match
+    for f in files:
+        fname = f.get("name", "").lower()
+        if target_lower in fname or fname in target_lower:
+            return f
+
+    # 3. Token overlap match (e.g. "iphone specs" in "iPhone Specs - Spreadsheet")
+    target_tokens = set(re.findall(r"\w+", target_lower))
+    best_file = None
+    best_score = 0
+    for f in files:
+        fname_tokens = set(re.findall(r"\w+", f.get("name", "").lower()))
+        overlap = len(target_tokens & fname_tokens)
+        if overlap > best_score:
+            best_score = overlap
+            best_file = f
+
+    if best_score > 0:
+        return best_file
+
+    return None
+
+
+def read_google_sheet(spreadsheet_id: str, range_name: Optional[str] = None) -> Dict[str, Any]:
+    """Read cell values and headers from a Google Spreadsheet."""
     creds = get_google_credentials()
     if not creds:
         return {"success": False, "requires_auth": True, "message": "Google Workspace not connected."}
@@ -607,20 +671,289 @@ def read_google_sheet(spreadsheet_id: str, range_name: str = "A1:Z50") -> Dict[s
     try:
         from googleapiclient.discovery import build
         sheets_service = build("sheets", "v4", credentials=creds)
+
+        spreadsheet_title = "Spreadsheet"
+        target_range = range_name
+        if not target_range:
+            try:
+                sheet_meta = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+                spreadsheet_title = sheet_meta.get("properties", {}).get("title", "Spreadsheet")
+                sheets = sheet_meta.get("sheets", [])
+                sheet_title = sheets[0].get("properties", {}).get("title", "Sheet1") if sheets else "Sheet1"
+                target_range = f"'{sheet_title}'!A1:Z500"
+            except Exception:
+                target_range = "Sheet1!A1:Z500"
+
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=range_name
+            range=target_range
         ).execute()
         values = result.get("values", [])
         return {
             "success": True,
             "spreadsheet_id": spreadsheet_id,
-            "range": range_name,
+            "title": spreadsheet_title,
+            "range": target_range,
             "values": values,
-            "row_count": len(values)
+            "row_count": len(values),
+            "headers": values[0] if values else []
         }
     except Exception as e:
         return {"success": False, "error": f"Failed to read Google Sheet: {str(e)}"}
+
+
+def append_to_google_sheet(
+    spreadsheet_id: str,
+    new_rows: Optional[List[List[Any]]] = None,
+    raw_text: Optional[str] = None,
+    sheet_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Append new rows to an existing Google Spreadsheet without destroying existing formatting.
+    Reads existing layout/headers and aligns columns cleanly.
+    """
+    creds = get_google_credentials()
+    if not creds:
+        return {"success": False, "requires_auth": True, "message": "Google Workspace not connected."}
+
+    try:
+        from googleapiclient.discovery import build
+        sheets_service = build("sheets", "v4", credentials=creds)
+
+        # 1. Inspect spreadsheet metadata to get target sheet name and title
+        first_sheet_title = "Sheet1"
+        spreadsheet_title = "Spreadsheet"
+        try:
+            sheet_meta = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+            sheets = sheet_meta.get("sheets", [])
+            if sheets:
+                first_sheet_title = sheets[0].get("properties", {}).get("title", "Sheet1")
+            spreadsheet_title = sheet_meta.get("properties", {}).get("title", "Spreadsheet")
+        except Exception as meta_err:
+            logger.warning("Could not fetch spreadsheet metadata for %s: %s", spreadsheet_id, meta_err)
+
+        target_sheet = sheet_name or first_sheet_title
+
+        # 2. Read existing rows to parse layout and headers
+        existing_values = []
+        try:
+            existing_res = sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{target_sheet}'!A1:Z500"
+            ).execute()
+            existing_values = existing_res.get("values", [])
+        except Exception:
+            pass
+
+        existing_headers = [str(h).strip().lower() for h in existing_values[0]] if existing_values else []
+        col_count = len(existing_values[0]) if existing_values else 0
+
+        # 3. Determine rows to append
+        matrix = new_rows
+        if not matrix and raw_text:
+            matrix = parse_text_to_matrix(raw_text)
+
+        if not matrix:
+            return {"success": False, "error": "No valid rows or data provided to append."}
+
+        # Filter out repeated header row if incoming data has the same header
+        rows_to_insert = []
+        for r in matrix:
+            cleaned_row = [clean_cell_text(c) if isinstance(c, str) else c for c in r]
+            row_lower = [str(c).strip().lower() for c in cleaned_row]
+            # If row matches existing header, skip it
+            if existing_headers and row_lower == existing_headers:
+                continue
+            # If row is empty, skip
+            if not any(bool(str(c).strip()) for c in cleaned_row):
+                continue
+            rows_to_insert.append(cleaned_row)
+
+        if not rows_to_insert:
+            rows_to_insert = [[clean_cell_text(c) if isinstance(c, str) else c for c in r] for r in matrix]
+
+        # Normalize column length to match existing sheet column count
+        if col_count > 0:
+            normalized_rows = []
+            for r in rows_to_insert:
+                if len(r) < col_count:
+                    r = r + [""] * (col_count - len(r))
+                normalized_rows.append(r)
+            rows_to_insert = normalized_rows
+
+        # 4. Append rows via Google Sheets API (preserves existing formatting)
+        append_res = sheets_service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{target_sheet}'!A1",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows_to_insert}
+        ).execute()
+
+        updates = append_res.get("updates", {})
+        updated_rows = updates.get("updatedRows", len(rows_to_insert))
+        updated_range = updates.get("updatedRange", "")
+
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+        return {
+            "success": True,
+            "service": "Google Sheets",
+            "spreadsheet_id": spreadsheet_id,
+            "title": spreadsheet_title,
+            "sheet_name": target_sheet,
+            "rows_appended": updated_rows,
+            "updated_range": updated_range,
+            "appended_values": rows_to_insert,
+            "url": sheet_url,
+            "message": f"Successfully appended {updated_rows} row(s) to Google Sheet '{spreadsheet_title}'."
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Failed to append to Google Sheet: {str(e)}"}
+
+
+def update_google_sheet(
+    spreadsheet_id: str,
+    range_name: str,
+    values: List[List[Any]]
+) -> Dict[str, Any]:
+    """
+    Update a specific cell range in an existing Google Spreadsheet without destroying surrounding formatting.
+    """
+    creds = get_google_credentials()
+    if not creds:
+        return {"success": False, "requires_auth": True, "message": "Google Workspace not connected."}
+
+    try:
+        from googleapiclient.discovery import build
+        sheets_service = build("sheets", "v4", credentials=creds)
+
+        cleaned_values = []
+        for r in values:
+            cleaned_values.append([clean_cell_text(c) if isinstance(c, str) else c for c in r])
+
+        res = sheets_service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            body={"values": cleaned_values}
+        ).execute()
+
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+        return {
+            "success": True,
+            "service": "Google Sheets",
+            "spreadsheet_id": spreadsheet_id,
+            "range": range_name,
+            "updated_rows": res.get("updatedRows", len(cleaned_values)),
+            "updated_cells": res.get("updatedCells", 0),
+            "url": sheet_url,
+            "message": f"Successfully updated range '{range_name}' in Google Sheet."
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Failed to update Google Sheet: {str(e)}"}
+
+
+def append_to_google_doc(document_id: str, content: str) -> Dict[str, Any]:
+    """
+    Append text, sections, or notes to the end of an existing Google Document using Docs batchUpdate.
+    """
+    creds = get_google_credentials()
+    if not creds:
+        return {"success": False, "requires_auth": True, "message": "Google Workspace not connected."}
+
+    if not content or not content.strip():
+        return {"success": False, "error": "No content provided to append to Google Doc."}
+
+    try:
+        from googleapiclient.discovery import build
+        docs_service = build("docs", "v1", credentials=creds)
+
+        doc = docs_service.documents().get(documentId=document_id).execute()
+        doc_title = doc.get("title", "Document")
+
+        # Determine end of document index
+        body_content = doc.get("body", {}).get("content", [])
+        end_index = 1
+        if body_content:
+            end_index = body_content[-1].get("endIndex", 1)
+
+        # Docs API requires insertion index <= endIndex - 1
+        insert_index = max(1, end_index - 1)
+        clean_text = content.strip().replace("\r\n", "\n")
+        insert_text = ("\n\n" + clean_text) if insert_index > 1 else clean_text
+
+        requests = [
+            {
+                "insertText": {
+                    "location": {"index": insert_index},
+                    "text": insert_text
+                }
+            }
+        ]
+
+        docs_service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": requests}
+        ).execute()
+
+        doc_url = f"https://docs.google.com/document/d/{document_id}/edit"
+        return {
+            "success": True,
+            "service": "Google Docs",
+            "document_id": document_id,
+            "title": doc_title,
+            "url": doc_url,
+            "message": f"Successfully appended content to Google Doc '{doc_title}'."
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Failed to append to Google Doc: {str(e)}"}
+
+
+def update_google_doc(
+    document_id: str,
+    content: Optional[str] = None,
+    replace_map: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Update an existing Google Document by replacing text or appending content.
+    """
+    if replace_map:
+        creds = get_google_credentials()
+        if not creds:
+            return {"success": False, "requires_auth": True, "message": "Google Workspace not connected."}
+        try:
+            from googleapiclient.discovery import build
+            docs_service = build("docs", "v1", credentials=creds)
+            requests = []
+            for find_txt, repl_txt in replace_map.items():
+                requests.append({
+                    "replaceAllText": {
+                        "containsText": {
+                            "text": find_txt,
+                            "matchCase": False
+                        },
+                        "replaceText": repl_txt
+                    }
+                })
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": requests}
+            ).execute()
+            doc_url = f"https://docs.google.com/document/d/{document_id}/edit"
+            return {
+                "success": True,
+                "service": "Google Docs",
+                "document_id": document_id,
+                "url": doc_url,
+                "message": "Successfully updated text in Google Doc."
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Failed to update Google Doc: {str(e)}"}
+    elif content:
+        return append_to_google_doc(document_id, content)
+    else:
+        return {"success": False, "error": "No content or replacement map provided for Google Doc update."}
+
 
 
 

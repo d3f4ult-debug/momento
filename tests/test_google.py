@@ -661,3 +661,267 @@ def test_create_google_sheet_formatting_error_does_not_break_creation():
             assert "url" in res
 
 
+def test_find_google_drive_file():
+    from services.google_workspace import find_google_drive_file
+
+    mock_files = [
+        {"id": "sheet_1", "name": "iPhone Specs", "type": "Google Sheet", "link": "https://sheet1"},
+        {"id": "sheet_2", "name": "Q4 Financials", "type": "Google Sheet", "link": "https://sheet2"},
+        {"id": "doc_1", "name": "Project Roadmap", "type": "Google Doc", "link": "https://doc1"}
+    ]
+
+    with patch("services.google_workspace.list_google_drive_files", return_value={"success": True, "files": mock_files}):
+        # Exact match
+        f1 = find_google_drive_file("Q4 Financials")
+        assert f1 is not None
+        assert f1["id"] == "sheet_2"
+
+        # Case-insensitive + filler strip: "my iPhone specs sheet"
+        f2 = find_google_drive_file("my iPhone specs sheet")
+        assert f2 is not None
+        assert f2["id"] == "sheet_1"
+
+        # Substring / token overlap: "Project Roadmap doc"
+        f3 = find_google_drive_file("Project Roadmap doc", file_type="doc")
+        assert f3 is not None
+        assert f3["id"] == "doc_1"
+
+        # Non-matching
+        f4 = find_google_drive_file("Nonexistent File 12345")
+        assert f4 is None
+
+
+def test_append_to_google_sheet_preserves_layout_and_omits_duplicate_headers():
+    from services.google_workspace import append_to_google_sheet
+
+    mock_sheets = MagicMock()
+
+    # Mock metadata: sheet has title "Specs"
+    mock_sheets.spreadsheets().get().execute.return_value = {
+        "properties": {"title": "iPhone Specs"},
+        "sheets": [{"properties": {"title": "Specs"}}]
+    }
+
+    # Mock existing rows: headers are ["Model", "Storage", "Price"]
+    mock_sheets.spreadsheets().values().get().execute.return_value = {
+        "values": [
+            ["Model", "Storage", "Price"],
+            ["iPhone 15", "128GB", "$799"]
+        ]
+    }
+
+    # Mock append execution
+    mock_sheets.spreadsheets().values().append().execute.return_value = {
+        "spreadsheetId": "test_sheet_id",
+        "updates": {"updatedRows": 1, "updatedRange": "Specs!A3:C3"}
+    }
+
+    raw_new_data = """
+| Model | Storage | Price |
+|---|---|---|
+| iPhone 16 | 128GB | $899 |
+"""
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_sheets):
+            res = append_to_google_sheet("test_sheet_id", raw_text=raw_new_data)
+
+            assert res["success"] is True
+            assert res["rows_appended"] == 1
+            assert "https://docs.google.com/spreadsheets/d/test_sheet_id/edit" in res["url"]
+
+            # Verify that the repeated header row ["Model", "Storage", "Price"] was omitted,
+            # and only the new data row was appended
+            append_call_args = mock_sheets.spreadsheets().values().append.call_args[1]
+            body_values = append_call_args["body"]["values"]
+            assert len(body_values) == 1
+            assert body_values[0] == ["iPhone 16", "128GB", "$899"]
+            assert append_call_args["insertDataOption"] == "INSERT_ROWS"
+
+
+def test_update_google_sheet_range():
+    from services.google_workspace import update_google_sheet
+
+    mock_sheets = MagicMock()
+    mock_sheets.spreadsheets().values().update().execute.return_value = {
+        "updatedRows": 1,
+        "updatedCells": 1
+    }
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_sheets):
+            res = update_google_sheet("sheet_xyz", range_name="Sheet1!C2", values=[["$1,200,000"]])
+            assert res["success"] is True
+            assert res["updated_cells"] == 1
+            assert res["range"] == "Sheet1!C2"
+
+
+def test_append_to_google_doc():
+    from services.google_workspace import append_to_google_doc
+
+    mock_docs = MagicMock()
+    mock_docs.documents().get().execute.return_value = {
+        "title": "Meeting Notes",
+        "body": {
+            "content": [
+                {"endIndex": 120}
+            ]
+        }
+    }
+    mock_docs.documents().batchUpdate().execute.return_value = {}
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_docs):
+            res = append_to_google_doc("doc_xyz", content="Next Steps: Launch Phase 2")
+            assert res["success"] is True
+            assert res["title"] == "Meeting Notes"
+
+            # Verify batchUpdate was called with insertText at endIndex - 1 (119)
+            batch_kwargs = mock_docs.documents().batchUpdate.call_args[1]
+            requests = batch_kwargs["body"]["requests"]
+            assert len(requests) == 1
+            assert "insertText" in requests[0]
+            assert requests[0]["insertText"]["location"]["index"] == 119
+            assert "Next Steps: Launch Phase 2" in requests[0]["insertText"]["text"]
+
+
+def test_update_google_doc_text_replacement():
+    from services.google_workspace import update_google_doc
+
+    mock_docs = MagicMock()
+    mock_docs.documents().batchUpdate().execute.return_value = {}
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_docs):
+            res = update_google_doc("doc_xyz", replace_map={"[DRAFT]": "[FINAL]"})
+            assert res["success"] is True
+
+            batch_kwargs = mock_docs.documents().batchUpdate.call_args[1]
+            requests = batch_kwargs["body"]["requests"]
+            assert len(requests) == 1
+            assert "replaceAllText" in requests[0]
+            assert requests[0]["replaceAllText"]["containsText"]["text"] == "[DRAFT]"
+            assert requests[0]["replaceAllText"]["replaceText"] == "[FINAL]"
+
+
+def test_detect_google_workspace_edit_intent():
+    from main import detect_google_workspace_edit_intent
+
+    # 1. Sheets append
+    q1 = detect_google_workspace_edit_intent("add a row for iPhone 16 to my iPhone specs sheet")
+    assert q1 is not None
+    assert q1["action"] == "append"
+    assert q1["target_file_name"] == "iPhone specs"
+    assert q1["file_type"] == "sheet"
+
+    # 2. Update existing sheet
+    q2 = detect_google_workspace_edit_intent("update the budget in Q4 Financials")
+    assert q2 is not None
+    assert q2["action"] == "update"
+    assert q2["target_file_name"] == "Q4 Financials"
+
+    # 3. Docs append
+    q3 = detect_google_workspace_edit_intent("append meeting notes to Project Roadmap doc")
+    assert q3 is not None
+    assert q3["action"] == "append"
+    assert q3["target_file_name"] == "Project Roadmap"
+    assert q3["file_type"] == "doc"
+
+    # 4. Multi-turn confirmation
+    chat_hist = [
+        {"role": "user", "content": "add a row for iPhone 16 to my iPhone specs sheet"},
+        {"role": "assistant", "content": "Found your sheet 'iPhone Specs'. Shall I append the row?"}
+    ]
+    q4 = detect_google_workspace_edit_intent("yes update that", chat_history=chat_hist)
+    assert q4 is not None
+    assert q4["target_file_name"] == "iPhone specs"
+
+    # 5. Informational query should NOT trigger edit intent
+    q5 = detect_google_workspace_edit_intent("what sheets do I have")
+    assert q5 is None
+
+    # 6. Direct creation prompt should NOT trigger edit intent
+    q6 = detect_google_workspace_edit_intent("create a new sheet with iPhone specs")
+    assert q6 is None
+
+
+def test_process_google_workspace_edit_routing_and_execution():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    mock_sheet_file = {
+        "id": "sheet_iphone_123",
+        "name": "iPhone Specs",
+        "type": "Google Sheet",
+        "link": "https://docs.google.com/spreadsheets/d/sheet_iphone_123/edit"
+    }
+
+    with patch("main.is_google_authenticated", return_value={"authenticated": True}), \
+         patch("main.find_google_drive_file", return_value=mock_sheet_file), \
+         patch("main.read_google_sheet", return_value={"headers": ["Model", "Display", "Price"], "values": [["Model", "Display", "Price"]]}), \
+         patch("main.execute_gemini_transformation", return_value="| iPhone 16 | 6.1 OLED | $799 |"), \
+         patch("main.append_to_google_sheet", return_value={"success": True, "rows_appended": 1, "url": "https://docs.google.com/spreadsheets/d/sheet_iphone_123/edit"}) as mock_append:
+
+        response = client.post("/api/process", data={
+            "prompt": "add a row for iPhone 16 to my iPhone specs sheet"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert mock_append.called
+        assert "Google Sheet Updated: [iPhone Specs]" in data["result"]
+        assert "https://docs.google.com/spreadsheets/d/sheet_iphone_123/edit" in data["result"]
+        assert data["integrations"]["google_edit"] is not None
+        assert data["integrations"]["google_edit"]["success"] is True
+
+
+def test_google_sheets_append_endpoint():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    with patch("main.append_to_google_sheet") as mock_append:
+        mock_append.return_value = {
+            "success": True,
+            "spreadsheet_id": "sheet_abc",
+            "rows_appended": 1,
+            "url": "https://docs.google.com/spreadsheets/d/sheet_abc/edit"
+        }
+
+        response = client.post("/api/google/sheets/append", data={
+            "file_id": "sheet_abc",
+            "content": "| A | B |\n| 1 | 2 |"
+        })
+
+        assert response.status_code == 200
+        res = response.json()
+        assert res["success"] is True
+        assert res["rows_appended"] == 1
+
+
+def test_google_docs_append_endpoint():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    with patch("main.append_to_google_doc") as mock_append:
+        mock_append.return_value = {
+            "success": True,
+            "document_id": "doc_abc",
+            "url": "https://docs.google.com/document/d/doc_abc/edit"
+        }
+
+        response = client.post("/api/google/docs/append", data={
+            "file_id": "doc_abc",
+            "content": "Added project summary section."
+        })
+
+        assert response.status_code == 200
+        res = response.json()
+        assert res["success"] is True
+        assert res["document_id"] == "doc_abc"
+
+
+
