@@ -8,10 +8,15 @@ import os
 import re
 import json
 import time
+import csv
+import io
+import logging
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("momento.google_workspace")
 
 SCOPES = [
     "https://www.googleapis.com/auth/documents",
@@ -106,45 +111,106 @@ def is_google_authenticated() -> Dict[str, Any]:
     }
 
 
+def clean_cell_text(cell: Any) -> str:
+    """Strip markdown formatting, links, backticks, and extra spaces from cell contents."""
+    if not isinstance(cell, str):
+        return cell if cell is not None else ""
+    text = cell.strip()
+    if not text:
+        return ""
+    # Convert markdown links [Label](url) -> Label
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # Strip bold and italics: **text**, __text__, `text`
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'__(.*?)__', r'\1', text)
+    text = re.sub(r'`(.*?)`', r'\1', text)
+    # Strip single asterisks/underscores wrapping text
+    text = re.sub(r'(?<!\w)\*([^*]+)\*(?!\w)', r'\1', text)
+    text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', text)
+    return text.strip()
+
+
 def parse_text_to_matrix(text: str) -> List[List[str]]:
-    """Convert Markdown tables, CSV text, or lines into a 2D matrix for Google Sheets."""
-    lines = text.strip().split("\n")
+    """Convert Markdown tables, CSV text, or lines into a normalized 2D matrix for Google Sheets."""
+    if not text:
+        return [["Data", ""]]
+
+    lines = [l.strip() for l in text.strip().split("\n")]
     table_rows = []
 
-    # Check for markdown table syntax
+    # 1. First pass: look for markdown table rows
     for line in lines:
-        line_str = line.strip()
-        if line_str.startswith("|") and line_str.endswith("|"):
-            # Skip separator line like |---|---|
-            if set(line_str.replace("|", "").strip()).issubset({"-", ":", " "}):
+        if not line:
+            continue
+        # Temporarily mask escaped pipes \|
+        masked = line.replace(r"\|", "__ESCAPED_PIPE__")
+
+        # Check if line looks like a markdown table row (has pipe)
+        if "|" in masked:
+            stripped_pipes = masked.replace("|", "").strip()
+            # Skip separator rows like |---|---| or :---:|:---
+            if stripped_pipes and set(stripped_pipes).issubset({"-", ":", " ", "="}):
                 continue
-            cells = [c.strip() for c in line_str.split("|")[1:-1]]
-            table_rows.append(cells)
+
+            parts = masked.split("|")
+            # If line started with |, first part is empty
+            if parts and parts[0].strip() == "":
+                parts = parts[1:]
+            # If line ended with |, last part is empty
+            if parts and parts[-1].strip() == "":
+                parts = parts[:-1]
+
+            if parts:
+                cells = [clean_cell_text(p.replace("__ESCAPED_PIPE__", "|")) for p in parts]
+                table_rows.append(cells)
 
     if table_rows:
-        return table_rows
+        # Normalize rectangular matrix: pad any uneven rows so columns align perfectly
+        max_cols = max(len(r) for r in table_rows)
+        normalized_table = []
+        for row in table_rows:
+            if len(row) < max_cols:
+                row = row + [""] * (max_cols - len(row))
+            normalized_table.append(row)
+        return normalized_table
 
-    # Fallback: check CSV format, tab-delimited, key-value pairs, or split into rows
-    for line in lines:
-        line_str = line.strip()
+    # 2. Check for CSV format if comma exists across lines
+    csv_candidates = [l for l in lines if l]
+    if any("," in l for l in csv_candidates):
+        try:
+            reader = csv.reader(io.StringIO(text.strip()))
+            csv_rows = []
+            for row in reader:
+                if row:
+                    csv_rows.append([clean_cell_text(c) for c in row])
+            if csv_rows and max(len(r) for r in csv_rows) > 1:
+                max_cols = max(len(r) for r in csv_rows)
+                return [r + [""] * (max_cols - len(r)) for r in csv_rows]
+        except Exception:
+            pass
+
+    # 3. Fallback: check tab-delimited, key-value pairs, or split into rows
+    for line_str in lines:
         if not line_str:
             continue
-        if "," in line_str:
-            table_rows.append([c.strip() for c in line_str.split(",")])
-        elif "\t" in line_str:
-            table_rows.append([c.strip() for c in line_str.split("\t")])
+        if "\t" in line_str:
+            table_rows.append([clean_cell_text(c) for c in line_str.split("\t")])
         elif ":" in line_str and not line_str.lower().startswith(("http://", "https://", "###", "##", "#")):
             clean_kv = line_str.lstrip("-*• ").strip()
             if ":" in clean_kv:
-                parts = [p.strip() for p in clean_kv.split(":", 1)]
+                parts = [clean_cell_text(p) for p in clean_kv.split(":", 1)]
                 if len(parts) == 2 and parts[0] and parts[1]:
                     table_rows.append(parts)
                     continue
-            table_rows.append([line_str])
+            table_rows.append([clean_cell_text(line_str)])
         else:
-            table_rows.append([line_str])
+            table_rows.append([clean_cell_text(line_str)])
 
-    return table_rows if table_rows else [["Data", text[:500]]]
+    if table_rows:
+        max_cols = max(len(r) for r in table_rows)
+        return [r + [""] * (max_cols - len(r)) for r in table_rows]
+
+    return [["Data", text[:500]]]
 
 
 def create_google_doc(title: str, content: str) -> Dict[str, Any]:
@@ -199,7 +265,7 @@ def create_google_doc(title: str, content: str) -> Dict[str, Any]:
 
 
 def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = None, raw_text: Optional[str] = None) -> Dict[str, Any]:
-    """Create a new Google Spreadsheet and populate it with a 2D data matrix."""
+    """Create a new Google Spreadsheet and populate it with a 2D data matrix, applying professional enterprise formatting."""
     creds = get_google_credentials()
     if not creds:
         return {
@@ -222,6 +288,12 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
         ).execute()
         spreadsheet_id = spreadsheet.get("spreadsheetId")
 
+        # Extract first sheet ID (defaults to 0 if not explicitly returned)
+        sheet_id = 0
+        sheets = spreadsheet.get("sheets", [])
+        if sheets and isinstance(sheets, list):
+            sheet_id = sheets[0].get("properties", {}).get("sheetId", 0)
+
         # 2. Determine matrix
         matrix = data_matrix
         if not matrix and raw_text:
@@ -229,6 +301,16 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
 
         if not matrix:
             matrix = [["Data"], ["No tabular data found"]]
+
+        # Clean cells and normalize matrix dimensions so all rows have uniform column count
+        max_cols = max((len(r) for r in matrix), default=1)
+        normalized_matrix = []
+        for r in matrix:
+            cleaned_row = [clean_cell_text(c) if isinstance(c, str) else c for c in r]
+            if len(cleaned_row) < max_cols:
+                cleaned_row.extend([""] * (max_cols - len(cleaned_row)))
+            normalized_matrix.append(cleaned_row)
+        matrix = normalized_matrix
 
         # 3. Write data to Sheet1
         value_range_body = {
@@ -240,6 +322,134 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
             valueInputOption="USER_ENTERED",
             body=value_range_body
         ).execute()
+
+        # 4. Enterprise-Grade Formatting & Auto-Fit Column Layout
+        num_rows = len(matrix)
+        num_cols = max_cols
+
+        format_requests = [
+            # Freeze header row
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": sheet_id,
+                        "gridProperties": {
+                            "frozenRowCount": 1
+                        }
+                    },
+                    "fields": "gridProperties.frozenRowCount"
+                }
+            },
+            # Style header row (Dark Slate #1E293B, Bold White Text, Wrap, Left/Middle Align)
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 0,
+                        "endRowIndex": 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": num_cols
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": {
+                                "red": 0.12,
+                                "green": 0.16,
+                                "blue": 0.23
+                            },
+                            "horizontalAlignment": "LEFT",
+                            "verticalAlignment": "MIDDLE",
+                            "textFormat": {
+                                "foregroundColor": {
+                                    "red": 1.0,
+                                    "green": 1.0,
+                                    "blue": 1.0
+                                },
+                                "fontSize": 11,
+                                "bold": True
+                            },
+                            "wrapStrategy": "WRAP"
+                        }
+                    },
+                    "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"
+                }
+            }
+        ]
+
+        if num_rows > 1:
+            # Data rows formatting: Text wrap (no clipped text), vertical middle alignment, clean 10pt font
+            format_requests.append({
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "endRowIndex": num_rows,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": num_cols
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "verticalAlignment": "MIDDLE",
+                            "wrapStrategy": "WRAP",
+                            "textFormat": {
+                                "fontSize": 10
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"
+                }
+            })
+            # Alternating subtle row banding (Zebra striping)
+            format_requests.append({
+                "addBanding": {
+                    "bandedRange": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 0,
+                            "endRowIndex": num_rows,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": num_cols
+                        },
+                        "rowProperties": {
+                            "headerColor": {
+                                "red": 0.12,
+                                "green": 0.16,
+                                "blue": 0.23
+                            },
+                            "firstBandColor": {
+                                "red": 1.0,
+                                "green": 1.0,
+                                "blue": 1.0
+                            },
+                            "secondBandColor": {
+                                "red": 0.96,
+                                "green": 0.97,
+                                "blue": 0.98
+                            }
+                        }
+                    }
+                }
+            })
+
+        # Auto-resize column widths across all columns so text isn't cramped or cut off
+        format_requests.append({
+            "autoResizeDimensions": {
+                "dimensions": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": num_cols
+                }
+            }
+        })
+
+        try:
+            sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"requests": format_requests}
+            ).execute()
+        except Exception as fmt_err:
+            logger.warning("Could not apply enterprise formatting to sheet %s: %s", spreadsheet_id, fmt_err)
 
         sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
         return {
@@ -256,6 +466,7 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
             "success": False,
             "error": f"Failed to create Google Sheet: {str(e)}"
         }
+
 
 
 def list_google_drive_files(

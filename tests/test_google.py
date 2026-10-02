@@ -521,3 +521,143 @@ def test_multi_turn_creation_endpoint_executes_tool_without_questionnaire_loop()
         assert call_kwargs.get("chat_history") is not None
 
 
+def test_parse_text_to_matrix_normalization_and_formatting():
+    from services.google_workspace import parse_text_to_matrix, clean_cell_text
+
+    # Test clean_cell_text
+    assert clean_cell_text("**Bold Text**") == "Bold Text"
+    assert clean_cell_text("[Apple Link](https://apple.com)") == "Apple Link"
+    assert clean_cell_text("`code_snippet`") == "code_snippet"
+
+    # Test uneven row normalization and escaped pipe handling
+    raw_markdown = """
+| **Device Model** | **Display** | **Price** |
+|---|---|---|
+| iPhone 16 Pro | 6.3\" \\| Super Retina OLED | $999 |
+| iPhone 16 | 6.1\" OLED |
+"""
+    matrix = parse_text_to_matrix(raw_markdown)
+    assert len(matrix) == 3
+    # Check headers cleaned of bold markers
+    assert matrix[0] == ["Device Model", "Display", "Price"]
+    # Check escaped pipe handled
+    assert matrix[1] == ["iPhone 16 Pro", '6.3" | Super Retina OLED', "$999"]
+    # Check uneven row padded to max_cols (3 columns)
+    assert matrix[2] == ["iPhone 16", '6.1" OLED', ""]
+    assert len(matrix[0]) == len(matrix[1]) == len(matrix[2]) == 3
+
+
+def test_parse_text_to_matrix_csv_quoted_commas():
+    from services.google_workspace import parse_text_to_matrix
+
+    csv_data = """Name,Company,Valuation\nTim Cook,"Apple, Inc.",$3 Trillion\nSatya Nadella,"Microsoft, Corp.",$3 Trillion"""
+    matrix = parse_text_to_matrix(csv_data)
+    assert len(matrix) == 3
+    assert matrix[0] == ["Name", "Company", "Valuation"]
+    assert matrix[1] == ["Tim Cook", "Apple, Inc.", "$3 Trillion"]
+    assert matrix[2] == ["Satya Nadella", "Microsoft, Corp.", "$3 Trillion"]
+
+
+def test_create_google_sheet_enterprise_formatting_and_batch_update():
+    from services.google_workspace import create_google_sheet
+
+    mock_sheets_service = MagicMock()
+    mock_create_exec = MagicMock()
+    mock_create_exec.execute.return_value = {
+        "spreadsheetId": "test_sheet_999",
+        "sheets": [{"properties": {"sheetId": 42}}]
+    }
+    mock_sheets_service.spreadsheets().create.return_value = mock_create_exec
+
+    mock_update_exec = MagicMock()
+    mock_sheets_service.spreadsheets().values().update.return_value = mock_update_exec
+
+    mock_batch_exec = MagicMock()
+    mock_sheets_service.spreadsheets().batchUpdate.return_value = mock_batch_exec
+
+    markdown_input = (
+        "| **Metric** | **Q1** | **Q2** |\n"
+        "|---|---|---|\n"
+        "| Revenue | $10,000 | $15,000 |\n"
+        "| Operating Profit | $2,000 | $3,500 |\n"
+    )
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_sheets_service):
+            res = create_google_sheet("Q1-Q2 Financials", raw_text=markdown_input)
+
+            assert res["success"] is True
+            assert res["spreadsheet_id"] == "test_sheet_999"
+            assert res["rows_written"] == 3
+
+            # Verify values.update was called with normalized matrix
+            update_call_kwargs = mock_sheets_service.spreadsheets().values().update.call_args[1]
+            written_values = update_call_kwargs["body"]["values"]
+            assert written_values[0] == ["Metric", "Q1", "Q2"]
+            assert written_values[1] == ["Revenue", "$10,000", "$15,000"]
+            assert written_values[2] == ["Operating Profit", "$2,000", "$3,500"]
+
+            # Verify batchUpdate was called with enterprise styling requests
+            assert mock_sheets_service.spreadsheets().batchUpdate.called
+            batch_kwargs = mock_sheets_service.spreadsheets().batchUpdate.call_args[1]
+            assert batch_kwargs["spreadsheetId"] == "test_sheet_999"
+            requests = batch_kwargs["body"]["requests"]
+
+            # Verify freeze header row request
+            freeze_req = next((r for r in requests if "updateSheetProperties" in r), None)
+            assert freeze_req is not None
+            assert freeze_req["updateSheetProperties"]["properties"]["gridProperties"]["frozenRowCount"] == 1
+            assert freeze_req["updateSheetProperties"]["properties"]["sheetId"] == 42
+
+            # Verify header styling request (Navy #1E293B, White bold text, text wrapping)
+            repeat_cell_reqs = [r for r in requests if "repeatCell" in r]
+            assert len(repeat_cell_reqs) >= 2
+            header_repeat = repeat_cell_reqs[0]["repeatCell"]
+            assert header_repeat["range"]["startRowIndex"] == 0
+            assert header_repeat["range"]["endRowIndex"] == 1
+            assert header_repeat["cell"]["userEnteredFormat"]["backgroundColor"]["red"] == 0.12
+            assert header_repeat["cell"]["userEnteredFormat"]["textFormat"]["bold"] is True
+            assert header_repeat["cell"]["userEnteredFormat"]["wrapStrategy"] == "WRAP"
+
+            # Verify data row formatting request (wrapStrategy: WRAP)
+            data_repeat = repeat_cell_reqs[1]["repeatCell"]
+            assert data_repeat["range"]["startRowIndex"] == 1
+            assert data_repeat["range"]["endRowIndex"] == 3
+            assert data_repeat["cell"]["userEnteredFormat"]["wrapStrategy"] == "WRAP"
+
+            # Verify alternating row banding (zebra striping)
+            banding_req = next((r for r in requests if "addBanding" in r), None)
+            assert banding_req is not None
+            assert banding_req["addBanding"]["bandedRange"]["range"]["sheetId"] == 42
+
+            # Verify auto-resize columns
+            resize_req = next((r for r in requests if "autoResizeDimensions" in r), None)
+            assert resize_req is not None
+            assert resize_req["autoResizeDimensions"]["dimensions"]["dimension"] == "COLUMNS"
+            assert resize_req["autoResizeDimensions"]["dimensions"]["startIndex"] == 0
+            assert resize_req["autoResizeDimensions"]["dimensions"]["endIndex"] == 3
+
+
+def test_create_google_sheet_formatting_error_does_not_break_creation():
+    from services.google_workspace import create_google_sheet
+
+    mock_sheets_service = MagicMock()
+    mock_create_exec = MagicMock()
+    mock_create_exec.execute.return_value = {
+        "spreadsheetId": "test_sheet_fail_fmt",
+        "sheets": [{"properties": {"sheetId": 0}}]
+    }
+    mock_sheets_service.spreadsheets().create.return_value = mock_create_exec
+
+    # batchUpdate raises error, but sheet creation should still succeed
+    mock_sheets_service.spreadsheets().batchUpdate.side_effect = Exception("Google API formatting rate limit")
+
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_sheets_service):
+            res = create_google_sheet("Resilient Sheet", raw_text="| Col1 | Col2 |\n|---|---|\n| 1 | 2 |")
+
+            assert res["success"] is True
+            assert res["spreadsheet_id"] == "test_sheet_fail_fmt"
+            assert "url" in res
+
+
