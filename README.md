@@ -247,31 +247,83 @@ This verifies:
 
 ---
 
+## 🖥️ Self-Hosted Local Office Engine (Headless LibreOffice)
+
+Momento operates as a 100% self-hosted document and spreadsheet generation engine on Ubuntu VPS, eliminating dependencies on external Google Workspace cloud APIs.
+
+### Supported Local Formats
+- **Documents**: `.docx` (Microsoft Word via python-docx), `.pdf` (Portable Document Format via headless LibreOffice), `.html`, `.txt`.
+- **Spreadsheets**: `.xlsx` (Excel via openpyxl with enterprise styling and auto column widths), `.ods` (OpenDocument Spreadsheet via headless LibreOffice), `.csv` (Excel-compatible UTF-8 BOM).
+
+### Ubuntu / Contabo VPS System Dependencies
+Run the automated installer script:
+```bash
+sudo bash deployment/setup_local_office.sh
+```
+
+Or install dependencies manually via `apt` and `pip`:
+```bash
+# 1. System packages & typography fonts
+sudo apt update
+sudo apt install -y --no-install-recommends \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    fonts-dejavu \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
+    fonts-liberation \
+    default-jre-headless
+
+# 2. Python packages in your virtual environment
+pip install python-docx openpyxl pandas
+
+# 3. Ensure exports storage directory exists with proper permissions
+sudo mkdir -p /var/www/momento/exports
+sudo chown -R www-data:www-data /var/www/momento/exports
+sudo chmod -R 775 /var/www/momento/exports
+```
+
+---
+
 ## 📡 API Reference
 
+### Local Office Status
+`GET /api/local/status`
+Returns LibreOffice installation status, binary command path, detected version, and supported document/spreadsheet formats.
+### Local Document Export
+`POST /api/local/export/doc`
+- Form fields: `title` (string), `content` (Markdown or plaintext), `format` (`docx` or `pdf`).
+- Returns: JSON with file metadata and direct `/api/download/{filename}` download link.
+### Local Spreadsheet Export
+`POST /api/local/export/sheet`
+- Form fields: `title` (string), `content` (Markdown table or CSV string), `format` (`xlsx`, `ods`, or `csv`).
+- Returns: JSON with file metadata, rows parsed, and direct download link.
+### Direct PDF Conversion
+`POST /api/local/export/pdf`
+- Form fields: `title` (string), `content` (Markdown or plaintext).
 ### Health Check
 `GET /api/health`
 ```json
 {
-  "status": "healthy",
-  "agent": "Momento",
-  "model": "gemini-2.5-flash",
-  "integrations": {
-    "gemini_api_key_configured": true,
-    "telegram_bot_configured": true,
-    "google_docs_placeholder": true,
-    "google_sheets_placeholder": true
-  }
+"status": "healthy",
+"agent": "Momento",
+"model": "gemini-2.5-flash",
+"integrations": {
+"gemini_api_key_configured": true,
+"telegram_bot_configured": true,
+"google_docs_placeholder": true,
+"google_sheets_placeholder": true
+}
 }
 ```
-
 ### Process Document & Instruction
 `POST /api/process`
 - Form fields:
-  - `prompt`: Natural language instructions (e.g. *"Summarize and extract action items"*).
-  - `file`: (Optional) Uploaded document (`.docx`, `.xlsx`, `.txt`, `.csv`, etc.).
-  - `selected_model`: (Optional) Proprietary model (`momento-nexus-2.5`, `momento-apex-3.1`, `momento-omni-3.8`).
-  - `custom_api_key`: (Optional) Overrides server API key.
-  - `send_telegram`: (Optional) `true` / `false`.
-  - `telegram_chat_id`: (Optional) Target Telegram user or channel ID.
+- `prompt`: Natural language instructions (e.g. *"Summarize and extract action items"*).
+- `file`: (Optional) Uploaded document (`.docx`, `.xlsx`, `.txt`, `.csv`, etc.).
+- `selected_model`: (Optional) Proprietary model (`momento-nexus-2.5`, `momento-apex-3.1`, `momento-omni-3.8`).
+- `custom_api_key`: (Optional) Overrides server API key.
+- `send_telegram`: (Optional) `true` / `false`.
+- `telegram_chat_id`: (Optional) Target Telegram user or channel ID.
 

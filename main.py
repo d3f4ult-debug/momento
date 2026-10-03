@@ -67,6 +67,14 @@ from services.olx_client import (
     format_uzs_price,
     resolve_olx_city_id,
 )
+from services.local_office import (
+    generate_local_doc,
+    generate_local_spreadsheet,
+    get_local_office_status,
+    is_libreoffice_available,
+    EXPORTS_DIR,
+    ensure_exports_dir,
+)
 
 # Load environment variables
 load_dotenv()
@@ -2143,6 +2151,7 @@ async def process_chat_query(
     export_type: Optional[str] = None
     target_title: Optional[str] = None
     google_export_result: Optional[Dict[str, Any]] = None
+    local_export_result: Optional[Dict[str, Any]] = None
     result_text: str = ""
     display_result: str = ""
     export_file_info: Optional[Dict[str, Any]] = None
@@ -2566,7 +2575,7 @@ async def process_chat_query(
         export_type = should_trigger_google_export(prompt, normalized_history)
         google_query = detect_google_workspace_query(prompt, normalized_history) if not export_type else None
 
-        if google_query or export_type:
+        if google_query:
             auth_status = is_google_authenticated()
             if not auth_status.get("authenticated"):
                 return JSONResponse(
@@ -2682,32 +2691,75 @@ async def process_chat_query(
                     label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
                     result_text = f"You currently have 0 {label} in your connected Google Drive account."
 
-        # Execute Google Workspace Export immediately on creation request or follow-up confirmation
+        # Execute Local Self-Hosted Office Generation and/or Google Workspace Export
+        local_export_result = None
         google_export_result = None
+
         if export_type == "docs":
             safe_doc_title = target_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
-            google_export_result = create_google_doc(safe_doc_title, result_text or "")
+            wants_pdf = bool(re.search(r"\bpdf\b", prompt, re.IGNORECASE))
+            doc_fmt = "pdf" if wants_pdf else "docx"
+            local_export_result = generate_local_doc(content=result_text or "", title=safe_doc_title, format=doc_fmt)
+
+            # If Google account is linked, also perform cloud export
+            if is_google_authenticated().get("authenticated"):
+                google_export_result = create_google_doc(safe_doc_title, result_text or "")
+            else:
+                google_export_result = local_export_result
         elif export_type == "sheets":
             safe_sheet_title = target_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
-            google_export_result = create_google_sheet(safe_sheet_title, raw_text=result_text or "")
+            wants_ods = bool(re.search(r"\bods\b", prompt, re.IGNORECASE))
+            wants_csv = bool(re.search(r"\bcsv\b", prompt, re.IGNORECASE))
+            sheet_fmt = "ods" if wants_ods else ("csv" if wants_csv else "xlsx")
+            local_export_result = generate_local_spreadsheet(content_or_matrix=result_text or "", title=safe_sheet_title, format=sheet_fmt)
+
+            # If Google account is linked, also perform cloud export
+            if is_google_authenticated().get("authenticated"):
+                google_export_result = create_google_sheet(safe_sheet_title, raw_text=result_text or "")
+            else:
+                google_export_result = local_export_result
 
         display_result = result_text or ""
-        if google_export_result and google_export_result.get("success"):
-            url = google_export_result.get("url", "")
+        if google_export_result and google_export_result.get("success") and "docs.google.com" in str(google_export_result.get("url", "")):
+            cloud_url = google_export_result.get("url", "")
             banner_title = target_title or google_export_result.get("title") or ("Spreadsheet" if export_type == "sheets" else "Document")
+            local_link = f"📥 **[Download Local Copy]({local_export_result.get('download_url')})**\n\n" if local_export_result and local_export_result.get("download_url") else ""
             if export_type == "sheets":
                 rows_w = google_export_result.get("rows_written", 0)
                 creation_banner = (
-                    f"### 📊 Google Sheet Created: [{banner_title}]({url})\n\n"
+                    f"### 📊 Google Sheet Created: [{banner_title}]({cloud_url})\n\n"
                     f"✅ Successfully created spreadsheet in your Google Drive with **{rows_w} rows** populated.\n"
-                    f"🔗 **[Open in Google Sheets]({url})**\n\n"
+                    f"🔗 **[Open in Google Sheets]({cloud_url})**\n\n"
+                    f"{local_link}"
                     f"---\n\n"
                 )
             else:
                 creation_banner = (
-                    f"### 📄 Google Doc Created: [{banner_title}]({url})\n\n"
+                    f"### 📄 Google Doc Created: [{banner_title}]({cloud_url})\n\n"
                     f"✅ Successfully created document in your Google Drive.\n"
-                    f"🔗 **[Open in Google Docs]({url})**\n\n"
+                    f"🔗 **[Open in Google Docs]({cloud_url})**\n\n"
+                    f"{local_link}"
+                    f"---\n\n"
+                )
+            if creation_banner not in display_result:
+                display_result = creation_banner + display_result
+        elif local_export_result and local_export_result.get("success"):
+            download_url = local_export_result.get("download_url") or local_export_result.get("url", "")
+            banner_title = target_title or local_export_result.get("title") or ("Spreadsheet" if export_type == "sheets" else "Document")
+            fmt = local_export_result.get("format", "DOCX" if export_type == "docs" else "XLSX").upper()
+            if export_type == "sheets":
+                rows_w = local_export_result.get("rows_written", 0)
+                creation_banner = (
+                    f"### 📊 Local Spreadsheet Created: [{banner_title}]({download_url})\n\n"
+                    f"✅ Successfully generated spreadsheet (**{rows_w} rows**) on server.\n"
+                    f"📥 **[Download Spreadsheet ({fmt})]({download_url})**\n\n"
+                    f"---\n\n"
+                )
+            else:
+                creation_banner = (
+                    f"### 📄 Local Document Created: [{banner_title}]({download_url})\n\n"
+                    f"✅ Successfully generated local document on server.\n"
+                    f"📥 **[Download Document ({fmt})]({download_url})**\n\n"
                     f"---\n\n"
                 )
             if creation_banner not in display_result:
@@ -2724,6 +2776,8 @@ async def process_chat_query(
                 )
             except Exception as exp_err:
                 print(f"Warning: Failed to compile export file: {exp_err}")
+        elif local_export_result and local_export_result.get("success"):
+            export_file_info = local_export_result
 
         # Conditional Telegram Userbot Dispatch
         telegram_result = None
@@ -2778,7 +2832,8 @@ async def process_chat_query(
             "export_file": export_file_info,
             "integrations": {
                 "telegram": telegram_result,
-                "google_export": google_export_result
+                "google_export": google_export_result,
+                "local_export": local_export_result
             }
         }
     except HTTPException:
@@ -2860,17 +2915,74 @@ async def google_callback_post(code: str = Form(...), state: Optional[str] = For
     return save_oauth_code(code, redirect_uri, state=state)
 
 
+# ==============================================================================
+# Local Self-Hosted Office Endpoints
+# ==============================================================================
+
+@app.get("/api/local/status")
+async def local_office_status_endpoint():
+    """Inspect local office engine availability, LibreOffice version, and storage health."""
+    return get_local_office_status()
+
+
+@app.post("/api/local/export/doc")
+async def local_export_doc_endpoint(
+    title: str = Form(...),
+    content: str = Form(...),
+    format: Optional[str] = Form("docx")
+):
+    """Generate a document (.docx or .pdf) locally using headless LibreOffice / python-docx."""
+    return generate_local_doc(content=content, title=title, format=format or "docx")
+
+
+@app.post("/api/local/export/sheet")
+async def local_export_sheet_endpoint(
+    title: str = Form(...),
+    content: str = Form(...),
+    format: Optional[str] = Form("xlsx")
+):
+    """Generate a spreadsheet (.xlsx, .ods, or .csv) locally using openpyxl / LibreOffice."""
+    return generate_local_spreadsheet(content_or_matrix=content, title=title, format=format or "xlsx")
+
+
+@app.post("/api/local/export/pdf")
+async def local_export_pdf_endpoint(
+    title: str = Form(...),
+    content: str = Form(...)
+):
+    """Direct PDF conversion endpoint using headless LibreOffice."""
+    return generate_local_doc(content=content, title=title, format="pdf")
+
+
+@app.get("/api/local/export/download/{file_identifier:path}")
+async def local_export_download_endpoint(file_identifier: str):
+    """Download locally generated file from exports directory."""
+    return await download_file_endpoint(file_identifier)
+
+
 @app.post("/api/google/export/doc")
 @app.post("/api/export/docs")
-async def trigger_docs_export(title: str = Form(...), content: str = Form(...)):
-    """Create a Google Doc from content."""
+async def trigger_docs_export(
+    title: str = Form(...),
+    content: str = Form(...),
+    engine: Optional[str] = Form(None)
+):
+    """Create a document locally (or fallback to Google Doc if cloud credentials available and requested)."""
+    if engine == "local" or (not is_google_authenticated().get("authenticated") and os.getenv("PREFER_LOCAL_OFFICE", "false").lower() == "true"):
+        return generate_local_doc(content=content, title=title, format="docx")
     return create_google_doc(title, content)
 
 
 @app.post("/api/google/export/sheet")
 @app.post("/api/export/sheets")
-async def trigger_sheets_export(title: str = Form(...), content: str = Form(...)):
-    """Create a Google Sheet from tabular or raw content."""
+async def trigger_sheets_export(
+    title: str = Form(...),
+    content: str = Form(...),
+    engine: Optional[str] = Form(None)
+):
+    """Create a spreadsheet locally (or fallback to Google Sheet if cloud credentials available and requested)."""
+    if engine == "local" or (not is_google_authenticated().get("authenticated") and os.getenv("PREFER_LOCAL_OFFICE", "false").lower() == "true"):
+        return generate_local_spreadsheet(content_or_matrix=content, title=title, format="xlsx")
     return create_google_sheet(title, raw_text=content)
 
 
@@ -2951,10 +3063,18 @@ async def google_docs_update_endpoint(
 
 @app.get("/api/download/{file_identifier:path}")
 async def download_file_endpoint(file_identifier: str):
-    """Serve generated file for download with directory traversal protection."""
+    """Serve generated file for download with directory traversal protection from exports or downloads."""
     downloads_dir = ensure_downloads_dir()
-    safe_path = os.path.abspath(os.path.join(downloads_dir, file_identifier))
-    if not safe_path.startswith(downloads_dir) or not os.path.exists(safe_path) or not os.path.isfile(safe_path):
+    exports_dir = ensure_exports_dir()
+
+    safe_export_path = os.path.abspath(os.path.join(exports_dir, file_identifier))
+    safe_download_path = os.path.abspath(os.path.join(downloads_dir, file_identifier))
+
+    if safe_export_path.startswith(exports_dir) and os.path.exists(safe_export_path) and os.path.isfile(safe_export_path):
+        safe_path = safe_export_path
+    elif safe_download_path.startswith(downloads_dir) and os.path.exists(safe_download_path) and os.path.isfile(safe_download_path):
+        safe_path = safe_download_path
+    else:
         raise HTTPException(status_code=404, detail="Requested file not found or has expired.")
 
     # Clean filename display: strip legacy uuid/test prefixes if present, otherwise preserve pristine filename
@@ -2972,6 +3092,10 @@ async def download_file_endpoint(file_identifier: str):
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".csv": "text/csv; charset=utf-8",
+        ".pdf": "application/pdf",
+        ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+        ".odt": "application/vnd.oasis.opendocument.text",
+        ".html": "text/html; charset=utf-8",
         ".txt": "text/plain; charset=utf-8",
         ".md": "text/markdown; charset=utf-8",
         ".json": "application/json",
