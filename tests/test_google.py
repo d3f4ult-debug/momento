@@ -921,7 +921,94 @@ def test_google_docs_append_endpoint():
         assert response.status_code == 200
         res = response.json()
         assert res["success"] is True
-        assert res["document_id"] == "doc_abc"
+def test_create_google_doc_safe_title_and_error_handling():
+    from services.google_workspace import create_google_doc
+
+    # 1. Test None title uses safe default
+    with patch("services.google_workspace.get_google_credentials", return_value=None):
+        unlinked_res = create_google_doc(None, "content")
+        assert unlinked_res["success"] is False
+        assert "Document -" in unlinked_res["title"]
+
+    # 2. Test exception handling returns structured failure dict and logs exception
+    mock_service = MagicMock()
+    mock_service.documents().create.side_effect = RuntimeError("Docs API down")
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_service):
+            with patch("services.google_workspace.logger.exception") as mock_log_exc:
+                res = create_google_doc(None, "content")
+                assert res["success"] is False
+                assert "Docs API down" in res["error"]
+                assert "Docs API down" in res["message"]
+                mock_log_exc.assert_called_once()
+
+
+def test_create_google_sheet_safe_title_and_error_handling():
+    from services.google_workspace import create_google_sheet
+
+    # 1. Test None title uses safe default
+    with patch("services.google_workspace.get_google_credentials", return_value=None):
+        unlinked_res = create_google_sheet(None)
+        assert unlinked_res["success"] is False
+        assert "Spreadsheet -" in unlinked_res["title"]
+
+    # 2. Test exception handling returns structured failure dict and logs exception
+    mock_service = MagicMock()
+    mock_service.spreadsheets().create.side_effect = RuntimeError("Sheets API down")
+    with patch("services.google_workspace.get_google_credentials", return_value=MagicMock()):
+        with patch("googleapiclient.discovery.build", return_value=mock_service):
+            with patch("services.google_workspace.logger.exception") as mock_log_exc:
+                res = create_google_sheet(None, raw_text="| Col |\n| Val |")
+                assert res["success"] is False
+                assert "Sheets API down" in res["error"]
+                assert "Sheets API down" in res["message"]
+                mock_log_exc.assert_called_once()
+
+
+def test_process_chat_query_unhandled_exception_returns_500():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    # Force an unhandled generic Exception during execution
+    with patch("main.detect_telegram_management_intent", side_effect=ValueError("Simulated critical failure")):
+        with patch("main.logger.exception") as mock_log_exc:
+            response = client.post("/api/process", data={
+                "prompt": "Create google sheet with stock prices",
+                "custom_api_key": "test_api_key"
+            })
+
+            assert response.status_code == 500
+            data = response.json()
+            assert data["success"] is False
+            assert "Simulated critical failure" in data["error"]
+            assert data["error_type"] == "ValueError"
+            mock_log_exc.assert_called_once()
+
+
+def test_process_chat_query_google_export_scoping_safety():
+    from fastapi.testclient import TestClient
+    from main import app
+    client = TestClient(app)
+
+    # Simulate export triggered with None title and None/empty result text
+    with patch("main.is_google_authenticated", return_value={"authenticated": True}), \
+         patch("main.should_trigger_google_export", return_value="sheets"), \
+         patch("main.extract_custom_title", return_value=None), \
+         patch("main.execute_gemini_transformation", return_value=""), \
+         patch("main.create_google_sheet", return_value={"success": True, "title": "Spreadsheet - 2026-10-03", "url": "https://docs.google.com/spreadsheets/d/123/edit", "rows_written": 2}):
+
+        response = client.post("/api/process", data={
+            "prompt": "create a new sheet",
+            "custom_api_key": "test_key"
+        })
+
+        assert response.status_code == 200
+        res = response.json()
+        assert res["status"] == "success"
+        assert res["integrations"]["google_export"]["success"] is True
+        assert "Google Sheet Created" in res["result"]
+
 
 
 

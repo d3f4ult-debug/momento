@@ -172,8 +172,10 @@ def test_process_xlsx_file(mock_gemini):
     assert res_data["file"]["extension"] == ".xlsx"
 
 
+@patch("main.is_google_authenticated", return_value={"authenticated": True})
+@patch("main.create_google_doc", return_value={"success": True, "service": "Google Docs", "url": "https://docs.google.com/document/d/mock/edit"})
 @patch("main.execute_gemini_transformation")
-def test_process_with_google_docs_intent(mock_gemini):
+def test_process_with_google_docs_intent(mock_gemini, mock_create_doc, mock_is_auth):
     mock_gemini.return_value = "Document summary ready for export."
 
     data = {

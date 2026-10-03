@@ -213,8 +213,9 @@ def parse_text_to_matrix(text: str) -> List[List[str]]:
     return [["Data", text[:500]]]
 
 
-def create_google_doc(title: str, content: str) -> Dict[str, Any]:
+def create_google_doc(title: Optional[str] = None, content: Optional[str] = None) -> Dict[str, Any]:
     """Create a new Google Document and populate it with content."""
+    safe_title = (title or "").strip() or f"Document - {time.strftime('%Y-%m-%d')}"
     creds = get_google_credentials()
     if not creds:
         # Return graceful mock placeholder with clear instructions
@@ -223,7 +224,7 @@ def create_google_doc(title: str, content: str) -> Dict[str, Any]:
             "status": "ready_for_credentials",
             "requires_auth": True,
             "service": "Google Docs",
-            "title": title,
+            "title": safe_title,
             "message": "Google Account not linked. Please connect your Google account in settings.",
             "mock_url": f"https://docs.google.com/document/d/mock-doc-{int(time.time())}/edit"
         }
@@ -233,11 +234,11 @@ def create_google_doc(title: str, content: str) -> Dict[str, Any]:
         docs_service = build("docs", "v1", credentials=creds)
 
         # 1. Create blank document
-        doc = docs_service.documents().create(body={"title": title}).execute()
+        doc = docs_service.documents().create(body={"title": safe_title}).execute()
         doc_id = doc.get("documentId")
 
         # 2. Insert text content
-        clean_content = content.replace("\r\n", "\n")
+        clean_content = (content or "").replace("\r\n", "\n")
         requests = [
             {
                 "insertText": {
@@ -254,18 +255,21 @@ def create_google_doc(title: str, content: str) -> Dict[str, Any]:
             "service": "Google Docs",
             "document_id": doc_id,
             "url": doc_url,
-            "title": title,
-            "message": f"Successfully created Google Doc: '{title}'"
+            "title": safe_title,
+            "message": f"Successfully created Google Doc: '{safe_title}'"
         }
     except Exception as e:
+        logger.exception("Failed to create Google Doc: %s", e)
         return {
             "success": False,
-            "error": f"Failed to create Google Doc: {str(e)}"
+            "error": f"Failed to create Google Doc: {str(e)}",
+            "message": f"Failed to create Google Doc: {str(e)}"
         }
 
 
-def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = None, raw_text: Optional[str] = None) -> Dict[str, Any]:
+def create_google_sheet(title: Optional[str] = None, data_matrix: Optional[List[List[Any]]] = None, raw_text: Optional[str] = None) -> Dict[str, Any]:
     """Create a new Google Spreadsheet and populate it with a 2D data matrix, applying professional enterprise formatting."""
+    safe_title = (title or "").strip() or f"Spreadsheet - {time.strftime('%Y-%m-%d')}"
     creds = get_google_credentials()
     if not creds:
         return {
@@ -273,7 +277,7 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
             "status": "ready_for_credentials",
             "requires_auth": True,
             "service": "Google Sheets",
-            "title": title,
+            "title": safe_title,
             "message": "Google Account not linked. Please connect your Google account in settings.",
             "mock_url": f"https://docs.google.com/spreadsheets/d/mock-sheet-{int(time.time())}/edit"
         }
@@ -284,7 +288,7 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
 
         # 1. Create spreadsheet
         spreadsheet = sheets_service.spreadsheets().create(
-            body={"properties": {"title": title}}
+            body={"properties": {"title": safe_title}}
         ).execute()
         spreadsheet_id = spreadsheet.get("spreadsheetId")
 
@@ -457,14 +461,16 @@ def create_google_sheet(title: str, data_matrix: Optional[List[List[Any]]] = Non
             "service": "Google Sheets",
             "spreadsheet_id": spreadsheet_id,
             "url": sheet_url,
-            "title": title,
+            "title": safe_title,
             "rows_written": len(matrix),
-            "message": f"Successfully created Google Sheet: '{title}'"
+            "message": f"Successfully created Google Sheet: '{safe_title}'"
         }
     except Exception as e:
+        logger.exception("Failed to create Google Sheet: %s", e)
         return {
             "success": False,
-            "error": f"Failed to create Google Sheet: {str(e)}"
+            "error": f"Failed to create Google Sheet: {str(e)}",
+            "message": f"Failed to create Google Sheet: {str(e)}"
         }
 
 

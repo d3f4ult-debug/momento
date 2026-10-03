@@ -244,8 +244,9 @@ def test_process_returns_export_file(mock_gemini):
         os.remove(full_path)
 
 
+@patch("main.is_google_authenticated", return_value={"authenticated": True})
 @patch("main.execute_gemini_transformation")
-def test_process_text_only_query_no_export_file(mock_gemini):
+def test_process_text_only_query_no_export_file(mock_gemini, mock_is_auth):
     mock_gemini.return_value = "Here are the files found in your Google Drive: 1. Budget 2026.xlsx, 2. Roadmap.docx"
 
     data = {

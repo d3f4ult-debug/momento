@@ -10,6 +10,7 @@ import sys
 import re
 import time
 import json
+import logging
 from typing import Optional, Dict, Any, List, Union
 
 from dotenv import load_dotenv
@@ -69,6 +70,8 @@ from services.olx_client import (
 
 # Load environment variables
 load_dotenv()
+
+logger = logging.getLogger("momento.main")
 
 # App Configuration
 GEMINI_API_KEY_ENV = os.getenv("GEMINI_API_KEY", "")
@@ -2136,194 +2139,67 @@ async def process_chat_query(
     """
     start_time = time.time()
 
-    # Determine Gemini API Key
-    effective_api_key = custom_api_key.strip() if custom_api_key and custom_api_key.strip() else GEMINI_API_KEY_ENV
-    if not effective_api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="No Gemini API Key provided. Set GEMINI_API_KEY in your environment or provide it directly in the UI."
-        )
+    # Pre-initialize variables to guarantee defined scope across all execution branches
+    export_type: Optional[str] = None
+    target_title: Optional[str] = None
+    google_export_result: Optional[Dict[str, Any]] = None
+    result_text: str = ""
+    display_result: str = ""
+    export_file_info: Optional[Dict[str, Any]] = None
+    telegram_result: Optional[Dict[str, Any]] = None
+    suppress_text_dump: bool = False
+    file_metadata: Optional[Dict[str, Any]] = None
+    extracted_text: Optional[str] = None
+    google_tool_context: Optional[str] = None
+    tool_res: Optional[Dict[str, Any]] = None
+    should_send_tg: bool = False
 
-    # Determine Model (proprietary Momento models & direct engine mappings)
-    raw_model = model.strip() if model and model.strip() else DEFAULT_MODEL
-    effective_model = MODEL_ID_MAP.get(raw_model.lower(), raw_model)
-    model_display_name = SUPPORTED_MODELS.get(raw_model.lower(), SUPPORTED_MODELS.get(effective_model, effective_model))
+    try:
 
-    if recipient_name and recipient_name.strip():
-        set_active_telegram_chat(recipient_name.strip())
-    elif telegram_chat_id and telegram_chat_id.strip():
-        set_active_telegram_chat(telegram_chat_id.strip())
-
-    hard_override = detect_telegram_summarization_hard_override(
-        prompt=prompt,
-        recipient_name=recipient_name,
-        telegram_chat_id=telegram_chat_id,
-        send_telegram=send_telegram,
-        send_to_telegram=send_to_telegram,
-        has_file=bool(file and file.filename)
-    )
-    if hard_override:
-        is_tg_auth = (
-            hasattr(get_telegram_chat_messages, "assert_called")
-            or (await is_userbot_authorized())
-        )
-        if not is_tg_auth:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "auth_required",
-                    "auth_code": "AUTH_REQUIRED_TELEGRAM",
-                    "service": "telegram",
-                    "message": "Telegram userbot authentication required. Please connect your Telegram account to perform Telegram management actions."
-                }
+        # Determine Gemini API Key
+        effective_api_key = custom_api_key.strip() if custom_api_key and custom_api_key.strip() else GEMINI_API_KEY_ENV
+        if not effective_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="No Gemini API Key provided. Set GEMINI_API_KEY in your environment or provide it directly in the UI."
             )
 
-        target_chat = hard_override.get("target_chat") or recipient_name or telegram_chat_id or get_active_telegram_chat()
-        topic = hard_override.get("topic")
-        return await summarize_telegram_chat_locally(
+        # Determine Model (proprietary Momento models & direct engine mappings)
+        raw_model = model.strip() if model and model.strip() else DEFAULT_MODEL
+        effective_model = MODEL_ID_MAP.get(raw_model.lower(), raw_model)
+        model_display_name = SUPPORTED_MODELS.get(raw_model.lower(), SUPPORTED_MODELS.get(effective_model, effective_model))
+
+        if recipient_name and recipient_name.strip():
+            set_active_telegram_chat(recipient_name.strip())
+        elif telegram_chat_id and telegram_chat_id.strip():
+            set_active_telegram_chat(telegram_chat_id.strip())
+
+        hard_override = detect_telegram_summarization_hard_override(
             prompt=prompt,
-            target_chat=target_chat,
-            topic=topic,
-            effective_api_key=effective_api_key,
-            raw_model=raw_model,
-            effective_model=effective_model,
-            model_display_name=model_display_name,
-            start_time=start_time
+            recipient_name=recipient_name,
+            telegram_chat_id=telegram_chat_id,
+            send_telegram=send_telegram,
+            send_to_telegram=send_to_telegram,
+            has_file=bool(file and file.filename)
         )
-
-    # ==========================================================================
-    # PRIORITY #1 INTENT OVERRIDE: Local OLX.uz Marketplace Search
-    # ==========================================================================
-    olx_intent = detect_olx_search_intent(prompt)
-    if olx_intent:
-        return await execute_olx_search_locally(
-            prompt=prompt,
-            olx_intent=olx_intent,
-            raw_model=raw_model,
-            effective_model=effective_model,
-            model_display_name=model_display_name,
-            start_time=start_time
-        )
-
-    # Extract File Content
-    extracted_text = None
-    file_metadata = None
-
-    if file and file.filename:
-        filename = file.filename
-        file_bytes = await file.read()
-        file_size_kb = round(len(file_bytes) / 1024, 2)
-
-        try:
-            extracted_text = extract_file_content(filename, file_bytes)
-            file_metadata = {
-                "filename": filename,
-                "size_kb": file_size_kb,
-                "character_count": len(extracted_text),
-                "extension": os.path.splitext(filename)[1].lower()
-            }
-        except ValueError as parse_err:
-            raise HTTPException(status_code=422, detail=str(parse_err))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Unexpected error parsing file '{filename}': {str(e)}")
-
-    # Construct System Instruction
-    system_instruction = (
-        "You are Momento, a fully autonomous digital employee with direct access to the user's connected "
-        "Google Workspace (Drive, Docs, Sheets). When the user asks about their files or spreadsheets "
-        "(e.g., 'what sheets in google do I have'), you MUST use the Google Drive/Sheets search tool to find "
-        "their actual, real files, list them out clearly with clickable Markdown links and bullet points, "
-        "and proactively invite the user to select, examine, summarize, edit, or transform them. "
-        "Always present their actual dynamic files from Drive. Never default to, fabricate, or lock onto placeholder "
-        "names like 'Momento Sheet'. "
-        "Never create a new Google Sheet or Document unless the user explicitly and directly instructs you to create or export one. "
-        "Never give canned refusals saying you are an AI or cannot access external files. You have live Google Workspace API access. "
-        "When files are retrieved, format them clearly with clickable Markdown links and bullet points."
-    )
-
-    # ==========================================================================
-    # Intent & Auth Guard: Pre-execution validation for external services
-    # Priority #1: Telegram Account Management (Block, Unblock, Kick/Ban, Search)
-    # ==========================================================================
-
-    # 1. Telegram Management Intent Guard (Priority #1)
-    tg_mgmt_intent = detect_telegram_management_intent(prompt, has_file=bool(file and file.filename))
-    if tg_mgmt_intent:
-        is_tg_auth = (
-            hasattr(block_telegram_user, "assert_called")
-            or hasattr(unblock_telegram_user, "assert_called")
-            or hasattr(kick_chat_member, "assert_called")
-            or hasattr(search_telegram_dialogs, "assert_called")
-            or hasattr(get_telegram_chat_messages, "assert_called")
-            or (await is_userbot_authorized())
-        )
-        if not is_tg_auth:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "auth_required",
-                    "auth_code": "AUTH_REQUIRED_TELEGRAM",
-                    "service": "telegram",
-                    "message": "Telegram userbot authentication required. Please connect your Telegram account to perform Telegram management actions."
-                }
+        if hard_override:
+            is_tg_auth = (
+                hasattr(get_telegram_chat_messages, "assert_called")
+                or (await is_userbot_authorized())
             )
+            if not is_tg_auth:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "auth_required",
+                        "auth_code": "AUTH_REQUIRED_TELEGRAM",
+                        "service": "telegram",
+                        "message": "Telegram userbot authentication required. Please connect your Telegram account to perform Telegram management actions."
+                    }
+                )
 
-        # Execute Telegram Management Action immediately
-        action = tg_mgmt_intent["action"]
-        mgmt_result = None
-        card_content = ""
-
-        if action == "block_user":
-            target = tg_mgmt_intent["target_user"]
-            if (not target or target.lower() in ("this", "the", "user", "this user")) and (recipient_name or telegram_chat_id):
-                target = recipient_name or telegram_chat_id
-            mgmt_result = await block_telegram_user(target)
-            status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
-            display_name = mgmt_result.get("display_name", target)
-            card_content = (
-                f"### 🛡️ Telegram User Blocked\n\n"
-                f"- **Status**: {status_badge}\n"
-                f"- **Target User**: `{target}` ({display_name})\n"
-                f"- **Action**: Blocked via `functions.contacts.BlockRequest`\n"
-                f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
-            )
-
-        elif action == "unblock_user":
-            target = tg_mgmt_intent["target_user"]
-            if (not target or target.lower() in ("this", "the", "user", "this user")) and (recipient_name or telegram_chat_id):
-                target = recipient_name or telegram_chat_id
-            mgmt_result = await unblock_telegram_user(target)
-            status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
-            display_name = mgmt_result.get("display_name", target)
-            card_content = (
-                f"### 🔓 Telegram User Unblocked\n\n"
-                f"- **Status**: {status_badge}\n"
-                f"- **Target User**: `{target}` ({display_name})\n"
-                f"- **Action**: Unblocked via `functions.contacts.UnblockRequest`\n"
-                f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
-            )
-
-        elif action in ("kick_member", "ban_member"):
-            target_user = tg_mgmt_intent["target_user"]
-            if (not target_user or target_user.lower() in ("this", "the", "user", "this user")) and recipient_name:
-                target_user = recipient_name
-            target_chat = tg_mgmt_intent.get("target_chat") or recipient_name or telegram_chat_id or "Active Chat"
-            is_ban = tg_mgmt_intent.get("ban", False)
-            mgmt_result = await kick_chat_member(target_chat, target_user, ban=is_ban)
-            status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
-            action_label = "Banned" if is_ban else "Kicked"
-            card_content = (
-                f"### 👢 Participant {action_label} from Group\n\n"
-                f"- **Status**: {status_badge}\n"
-                f"- **Group / Channel**: `{mgmt_result.get('chat', target_chat)}`\n"
-                f"- **Target Participant**: `{mgmt_result.get('target', target_user)}`\n"
-                f"- **Restriction Mode**: {'Permanent Ban (view_messages=False)' if is_ban else 'Participant Kick'}\n"
-                f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
-            )
-
-        elif action == "summarize_chat":
-            target_chat = tg_mgmt_intent.get("target_chat") or recipient_name or telegram_chat_id or get_active_telegram_chat()
-            topic = tg_mgmt_intent.get("topic")
+            target_chat = hard_override.get("target_chat") or recipient_name or telegram_chat_id or get_active_telegram_chat()
+            topic = hard_override.get("topic")
             return await summarize_telegram_chat_locally(
                 prompt=prompt,
                 target_chat=target_chat,
@@ -2335,95 +2211,339 @@ async def process_chat_query(
                 start_time=start_time
             )
 
-        elif action == "search_dialogs":
-            kw = tg_mgmt_intent.get("query")
-            unread_only = tg_mgmt_intent.get("unread_only", False)
-            sender = tg_mgmt_intent.get("sender_name")
-            mgmt_result = await search_telegram_dialogs(query=kw, unread_only=unread_only, sender_name=sender)
-            status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
-
-            dialogs = mgmt_result.get("dialogs", [])
-            messages = mgmt_result.get("messages", [])
-
-            dialog_lines = []
-            for d in dialogs[:10]:
-                unread_str = f" `{d['unread_count']} unread`" if d.get('unread_count', 0) > 0 else ""
-                snippet = f" — *\"{d['last_message'][:60]}...\"*" if d.get('last_message') else ""
-                dialog_lines.append(f"- **{d['name']}** ({d['type']}){unread_str}{snippet}")
-
-            message_lines = []
-            for m in messages[:8]:
-                m_snippet = m.get('text', '').replace('\n', ' ')[:100]
-                message_lines.append(f"- **{m.get('sender', 'User')}** in *{m.get('chat_title', 'Chat')}*: \"{m_snippet}...\"")
-
-            sections = []
-            if dialog_lines:
-                sections.append("#### 📂 Matching Dialogs\n" + "\n".join(dialog_lines))
-            if message_lines:
-                sections.append("#### 💬 Message History Results\n" + "\n".join(message_lines))
-            if not sections:
-                sections.append("*No dialogs or messages matched your criteria.*")
-
-            card_content = (
-                f"### 🔍 Telegram Dialog & Message Search\n\n"
-                f"- **Query**: {f'`{kw}`' if kw else 'None'}\n"
-                f"- **Unread Only**: `{'Yes' if unread_only else 'No'}`\n"
-                f"- **Results**: Found {len(dialogs)} dialogs and {len(messages)} messages.\n\n"
-                + "\n\n".join(sections)
+        # ==========================================================================
+        # PRIORITY #1 INTENT OVERRIDE: Local OLX.uz Marketplace Search
+        # ==========================================================================
+        olx_intent = detect_olx_search_intent(prompt)
+        if olx_intent:
+            return await execute_olx_search_locally(
+                prompt=prompt,
+                olx_intent=olx_intent,
+                raw_model=raw_model,
+                effective_model=effective_model,
+                model_display_name=model_display_name,
+                start_time=start_time
             )
 
-        elapsed_seconds = round(time.time() - start_time, 2)
-        return {
-            "status": "success",
-            "model": raw_model,
-            "model_name": model_display_name,
-            "effective_model": effective_model,
-            "elapsed_seconds": elapsed_seconds,
-            "file": file_metadata,
-            "result": card_content,
-            "suppress_text_dump": False,
-            "export_file": None,
-            "integrations": {
-                "telegram": mgmt_result,
-                "telegram_management": mgmt_result,
-                "google_export": None
-            }
-        }
+        # Extract File Content
+        extracted_text = None
+        file_metadata = None
 
-    # Normalize full recent chat history from client or active session
-    normalized_history = normalize_chat_history(chat_history)
+        if file and file.filename:
+            filename = file.filename
+            file_bytes = await file.read()
+            file_size_kb = round(len(file_bytes) / 1024, 2)
 
-    # 2. Google Workspace Edit / Append Intent (Priority over new creation)
-    edit_intent = detect_google_workspace_edit_intent(prompt, normalized_history)
-    if edit_intent:
-        auth_status = is_google_authenticated()
-        if not auth_status.get("authenticated"):
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "auth_required",
-                    "auth_code": "AUTH_REQUIRED_GOOGLE",
-                    "service": "google",
-                    "message": "Google Workspace authentication required. Please connect your Google account in settings to modify existing files."
+            try:
+                extracted_text = extract_file_content(filename, file_bytes)
+                file_metadata = {
+                    "filename": filename,
+                    "size_kb": file_size_kb,
+                    "character_count": len(extracted_text),
+                    "extension": os.path.splitext(filename)[1].lower()
                 }
+            except ValueError as parse_err:
+                raise HTTPException(status_code=422, detail=str(parse_err))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Unexpected error parsing file '{filename}': {str(e)}")
+
+        # Construct System Instruction
+        system_instruction = (
+            "You are Momento, a fully autonomous digital employee with direct access to the user's connected "
+            "Google Workspace (Drive, Docs, Sheets). When the user asks about their files or spreadsheets "
+            "(e.g., 'what sheets in google do I have'), you MUST use the Google Drive/Sheets search tool to find "
+            "their actual, real files, list them out clearly with clickable Markdown links and bullet points, "
+            "and proactively invite the user to select, examine, summarize, edit, or transform them. "
+            "Always present their actual dynamic files from Drive. Never default to, fabricate, or lock onto placeholder "
+            "names like 'Momento Sheet'. "
+            "Never create a new Google Sheet or Document unless the user explicitly and directly instructs you to create or export one. "
+            "Never give canned refusals saying you are an AI or cannot access external files. You have live Google Workspace API access. "
+            "When files are retrieved, format them clearly with clickable Markdown links and bullet points."
+        )
+
+        # ==========================================================================
+        # Intent & Auth Guard: Pre-execution validation for external services
+        # Priority #1: Telegram Account Management (Block, Unblock, Kick/Ban, Search)
+        # ==========================================================================
+
+        # 1. Telegram Management Intent Guard (Priority #1)
+        tg_mgmt_intent = detect_telegram_management_intent(prompt, has_file=bool(file and file.filename))
+        if tg_mgmt_intent:
+            is_tg_auth = (
+                hasattr(block_telegram_user, "assert_called")
+                or hasattr(unblock_telegram_user, "assert_called")
+                or hasattr(kick_chat_member, "assert_called")
+                or hasattr(search_telegram_dialogs, "assert_called")
+                or hasattr(get_telegram_chat_messages, "assert_called")
+                or (await is_userbot_authorized())
             )
-
-        target_file_name = edit_intent.get("target_file_name")
-        target_file_type = edit_intent.get("file_type")
-        found_file = find_google_drive_file(target_file_name, file_type=target_file_type)
-
-        if not found_file:
-            # File search failed, suggest recent files
-            drive_res = list_google_drive_files(file_type=target_file_type, page_size=10)
-            recent = drive_res.get("files", []) if drive_res.get("success") else []
-            suggestions = ""
-            if recent:
-                suggestions = "\n\n**Here are your recent files:**\n" + "\n".join(
-                    [f"- **[{f['name']}]({f['link']})** ({f['type']})" for f in recent[:5]]
+            if not is_tg_auth:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "auth_required",
+                        "auth_code": "AUTH_REQUIRED_TELEGRAM",
+                        "service": "telegram",
+                        "message": "Telegram userbot authentication required. Please connect your Telegram account to perform Telegram management actions."
+                    }
                 )
-            msg = f"Could not find an existing Google Drive file matching **'{target_file_name}'**.{suggestions}"
+
+            # Execute Telegram Management Action immediately
+            action = tg_mgmt_intent["action"]
+            mgmt_result = None
+            card_content = ""
+
+            if action == "block_user":
+                target = tg_mgmt_intent["target_user"]
+                if (not target or target.lower() in ("this", "the", "user", "this user")) and (recipient_name or telegram_chat_id):
+                    target = recipient_name or telegram_chat_id
+                mgmt_result = await block_telegram_user(target)
+                status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
+                display_name = mgmt_result.get("display_name", target)
+                card_content = (
+                    f"### 🛡️ Telegram User Blocked\n\n"
+                    f"- **Status**: {status_badge}\n"
+                    f"- **Target User**: `{target}` ({display_name})\n"
+                    f"- **Action**: Blocked via `functions.contacts.BlockRequest`\n"
+                    f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
+                )
+
+            elif action == "unblock_user":
+                target = tg_mgmt_intent["target_user"]
+                if (not target or target.lower() in ("this", "the", "user", "this user")) and (recipient_name or telegram_chat_id):
+                    target = recipient_name or telegram_chat_id
+                mgmt_result = await unblock_telegram_user(target)
+                status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
+                display_name = mgmt_result.get("display_name", target)
+                card_content = (
+                    f"### 🔓 Telegram User Unblocked\n\n"
+                    f"- **Status**: {status_badge}\n"
+                    f"- **Target User**: `{target}` ({display_name})\n"
+                    f"- **Action**: Unblocked via `functions.contacts.UnblockRequest`\n"
+                    f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
+                )
+
+            elif action in ("kick_member", "ban_member"):
+                target_user = tg_mgmt_intent["target_user"]
+                if (not target_user or target_user.lower() in ("this", "the", "user", "this user")) and recipient_name:
+                    target_user = recipient_name
+                target_chat = tg_mgmt_intent.get("target_chat") or recipient_name or telegram_chat_id or "Active Chat"
+                is_ban = tg_mgmt_intent.get("ban", False)
+                mgmt_result = await kick_chat_member(target_chat, target_user, ban=is_ban)
+                status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
+                action_label = "Banned" if is_ban else "Kicked"
+                card_content = (
+                    f"### 👢 Participant {action_label} from Group\n\n"
+                    f"- **Status**: {status_badge}\n"
+                    f"- **Group / Channel**: `{mgmt_result.get('chat', target_chat)}`\n"
+                    f"- **Target Participant**: `{mgmt_result.get('target', target_user)}`\n"
+                    f"- **Restriction Mode**: {'Permanent Ban (view_messages=False)' if is_ban else 'Participant Kick'}\n"
+                    f"- **Details**: {mgmt_result.get('message') or mgmt_result.get('error')}\n"
+                )
+
+            elif action == "summarize_chat":
+                target_chat = tg_mgmt_intent.get("target_chat") or recipient_name or telegram_chat_id or get_active_telegram_chat()
+                topic = tg_mgmt_intent.get("topic")
+                return await summarize_telegram_chat_locally(
+                    prompt=prompt,
+                    target_chat=target_chat,
+                    topic=topic,
+                    effective_api_key=effective_api_key,
+                    raw_model=raw_model,
+                    effective_model=effective_model,
+                    model_display_name=model_display_name,
+                    start_time=start_time
+                )
+
+            elif action == "search_dialogs":
+                kw = tg_mgmt_intent.get("query")
+                unread_only = tg_mgmt_intent.get("unread_only", False)
+                sender = tg_mgmt_intent.get("sender_name")
+                mgmt_result = await search_telegram_dialogs(query=kw, unread_only=unread_only, sender_name=sender)
+                status_badge = "✅ Success" if mgmt_result.get("success") else "❌ Failed"
+
+                dialogs = mgmt_result.get("dialogs", [])
+                messages = mgmt_result.get("messages", [])
+
+                dialog_lines = []
+                for d in dialogs[:10]:
+                    unread_str = f" `{d['unread_count']} unread`" if d.get('unread_count', 0) > 0 else ""
+                    snippet = f" — *\"{d['last_message'][:60]}...\"*" if d.get('last_message') else ""
+                    dialog_lines.append(f"- **{d['name']}** ({d['type']}){unread_str}{snippet}")
+
+                message_lines = []
+                for m in messages[:8]:
+                    m_snippet = m.get('text', '').replace('\n', ' ')[:100]
+                    message_lines.append(f"- **{m.get('sender', 'User')}** in *{m.get('chat_title', 'Chat')}*: \"{m_snippet}...\"")
+
+                sections = []
+                if dialog_lines:
+                    sections.append("#### 📂 Matching Dialogs\n" + "\n".join(dialog_lines))
+                if message_lines:
+                    sections.append("#### 💬 Message History Results\n" + "\n".join(message_lines))
+                if not sections:
+                    sections.append("*No dialogs or messages matched your criteria.*")
+
+                card_content = (
+                    f"### 🔍 Telegram Dialog & Message Search\n\n"
+                    f"- **Query**: {f'`{kw}`' if kw else 'None'}\n"
+                    f"- **Unread Only**: `{'Yes' if unread_only else 'No'}`\n"
+                    f"- **Results**: Found {len(dialogs)} dialogs and {len(messages)} messages.\n\n"
+                    + "\n\n".join(sections)
+                )
+
+            elapsed_seconds = round(time.time() - start_time, 2)
+            return {
+                "status": "success",
+                "model": raw_model,
+                "model_name": model_display_name,
+                "effective_model": effective_model,
+                "elapsed_seconds": elapsed_seconds,
+                "file": file_metadata,
+                "result": card_content,
+                "suppress_text_dump": False,
+                "export_file": None,
+                "integrations": {
+                    "telegram": mgmt_result,
+                    "telegram_management": mgmt_result,
+                    "google_export": None
+                }
+            }
+
+        # Normalize full recent chat history from client or active session
+        normalized_history = normalize_chat_history(chat_history)
+
+        # 2. Google Workspace Edit / Append Intent (Priority over new creation)
+        edit_intent = detect_google_workspace_edit_intent(prompt, normalized_history)
+        if edit_intent:
+            auth_status = is_google_authenticated()
+            if not auth_status.get("authenticated"):
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "auth_required",
+                        "auth_code": "AUTH_REQUIRED_GOOGLE",
+                        "service": "google",
+                        "message": "Google Workspace authentication required. Please connect your Google account in settings to modify existing files."
+                    }
+                )
+
+            target_file_name = edit_intent.get("target_file_name")
+            target_file_type = edit_intent.get("file_type")
+            found_file = find_google_drive_file(target_file_name, file_type=target_file_type)
+
+            if not found_file:
+                # File search failed, suggest recent files
+                drive_res = list_google_drive_files(file_type=target_file_type, page_size=10)
+                recent = drive_res.get("files", []) if drive_res.get("success") else []
+                suggestions = ""
+                if recent:
+                    suggestions = "\n\n**Here are your recent files:**\n" + "\n".join(
+                        [f"- **[{f['name']}]({f['link']})** ({f['type']})" for f in recent[:5]]
+                    )
+                msg = f"Could not find an existing Google Drive file matching **'{target_file_name}'**.{suggestions}"
+                add_to_session_chat_history("user", prompt)
+                add_to_session_chat_history("assistant", msg)
+                return {
+                    "status": "success",
+                    "model": raw_model,
+                    "model_name": model_display_name,
+                    "effective_model": effective_model,
+                    "elapsed_seconds": round(time.time() - start_time, 2),
+                    "file": file_metadata,
+                    "result": msg,
+                    "suppress_text_dump": False,
+                    "export_file": None,
+                    "integrations": {
+                        "telegram": None,
+                        "telegram_management": None,
+                        "google_export": None,
+                        "google_edit": {"success": False, "error": f"File '{target_file_name}' not found."}
+                    }
+                }
+
+            # File located!
+            file_id = found_file["id"]
+            file_title = found_file["name"]
+            file_link = found_file["link"]
+            is_sheet = "sheet" in found_file.get("type", "").lower() or "spreadsheet" in found_file.get("type", "").lower()
+
+            if is_sheet:
+                sheet_info = read_google_sheet(file_id)
+                headers = sheet_info.get("headers", [])
+                existing_rows = sheet_info.get("values", [])
+
+                edit_context = (
+                    f"### [Tool: Existing Google Sheet Content (`sheets.spreadsheets.values.get`)]\n"
+                    f"Target File: {file_title} (ID: `{file_id}`)\n"
+                    f"Existing Columns/Headers: {json.dumps(headers)}\n"
+                    f"Recent Sample Rows: {json.dumps(existing_rows[-3:] if existing_rows else [])}\n\n"
+                    f"CRITICAL DIRECTIVE: The user wants to update or append to this spreadsheet. "
+                    f"Generate ONLY the row(s) to append or update in Markdown table format, "
+                    f"matching the columns {json.dumps(headers)}. "
+                    f"Do NOT output setup questionnaires, explanations, or conversational filler."
+                )
+
+                result_text = execute_gemini_transformation(
+                    api_key=effective_api_key,
+                    model_name=effective_model,
+                    system_instruction=system_instruction,
+                    user_prompt=prompt,
+                    file_content=extracted_text,
+                    filename=file.filename if file else None,
+                    google_context=edit_context,
+                    chat_history=normalized_history,
+                    creation_export_type="sheets",
+                    target_title=file_title
+                )
+
+                append_res = append_to_google_sheet(file_id, raw_text=result_text)
+                rows_w = append_res.get("rows_appended", 1) if append_res.get("success") else 0
+
+                display_result = (
+                    f"### 📊 Google Sheet Updated: [{file_title}]({file_link})\n\n"
+                    f"✅ Successfully updated **{file_title}** in your Google Drive ({rows_w} row(s) appended).\n"
+                    f"🔗 **[Open in Google Sheets]({file_link})**\n\n"
+                    f"---\n\n"
+                    f"{result_text}"
+                )
+                edit_res = append_res
+            else:
+                # Google Doc
+                edit_context = (
+                    f"### [Tool: Existing Google Doc (`docs.documents.get`)]\n"
+                    f"Target File: {file_title} (ID: `{file_id}`)\n\n"
+                    f"CRITICAL DIRECTIVE: The user wants to append or update content in this document. "
+                    f"Generate the exact structured text, section, or notes requested. "
+                    f"Do NOT output setup questionnaires or conversational filler."
+                )
+
+                result_text = execute_gemini_transformation(
+                    api_key=effective_api_key,
+                    model_name=effective_model,
+                    system_instruction=system_instruction,
+                    user_prompt=prompt,
+                    file_content=extracted_text,
+                    filename=file.filename if file else None,
+                    google_context=edit_context,
+                    chat_history=normalized_history,
+                    creation_export_type="docs",
+                    target_title=file_title
+                )
+
+                append_res = append_to_google_doc(file_id, result_text)
+                display_result = (
+                    f"### 📄 Google Doc Updated: [{file_title}]({file_link})\n\n"
+                    f"✅ Successfully updated document in your Google Drive.\n"
+                    f"🔗 **[Open in Google Docs]({file_link})**\n\n"
+                    f"---\n\n"
+                    f"{result_text}"
+                )
+                edit_res = append_res
+
             add_to_session_chat_history("user", prompt)
-            add_to_session_chat_history("assistant", msg)
+            add_to_session_chat_history("assistant", display_result)
+
             return {
                 "status": "success",
                 "model": raw_model,
@@ -2431,333 +2551,248 @@ async def process_chat_query(
                 "effective_model": effective_model,
                 "elapsed_seconds": round(time.time() - start_time, 2),
                 "file": file_metadata,
-                "result": msg,
+                "result": display_result,
                 "suppress_text_dump": False,
                 "export_file": None,
                 "integrations": {
                     "telegram": None,
                     "telegram_management": None,
                     "google_export": None,
-                    "google_edit": {"success": False, "error": f"File '{target_file_name}' not found."}
+                    "google_edit": edit_res
                 }
             }
 
-        # File located!
-        file_id = found_file["id"]
-        file_title = found_file["name"]
-        file_link = found_file["link"]
-        is_sheet = "sheet" in found_file.get("type", "").lower() or "spreadsheet" in found_file.get("type", "").lower()
+        # 3. Google Workspace Intent & Export Guard (with Multi-turn Awareness)
+        export_type = should_trigger_google_export(prompt, normalized_history)
+        google_query = detect_google_workspace_query(prompt, normalized_history) if not export_type else None
 
-        if is_sheet:
-            sheet_info = read_google_sheet(file_id)
-            headers = sheet_info.get("headers", [])
-            existing_rows = sheet_info.get("values", [])
+        if google_query or export_type:
+            auth_status = is_google_authenticated()
+            if not auth_status.get("authenticated"):
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "auth_required",
+                        "auth_code": "AUTH_REQUIRED_GOOGLE",
+                        "service": "google",
+                        "message": "Google Workspace authentication required. Please connect your Google account to access Drive, Docs, and Sheets."
+                    }
+                )
 
-            edit_context = (
-                f"### [Tool: Existing Google Sheet Content (`sheets.spreadsheets.values.get`)]\n"
-                f"Target File: {file_title} (ID: `{file_id}`)\n"
-                f"Existing Columns/Headers: {json.dumps(headers)}\n"
-                f"Recent Sample Rows: {json.dumps(existing_rows[-3:] if existing_rows else [])}\n\n"
-                f"CRITICAL DIRECTIVE: The user wants to update or append to this spreadsheet. "
-                f"Generate ONLY the row(s) to append or update in Markdown table format, "
-                f"matching the columns {json.dumps(headers)}. "
-                f"Do NOT output setup questionnaires, explanations, or conversational filler."
-            )
-
-            result_text = execute_gemini_transformation(
-                api_key=effective_api_key,
-                model_name=effective_model,
-                system_instruction=system_instruction,
-                user_prompt=prompt,
-                file_content=extracted_text,
-                filename=file.filename if file else None,
-                google_context=edit_context,
-                chat_history=normalized_history,
-                creation_export_type="sheets",
-                target_title=file_title
-            )
-
-            append_res = append_to_google_sheet(file_id, raw_text=result_text)
-            rows_w = append_res.get("rows_appended", 1) if append_res.get("success") else 0
-
-            display_result = (
-                f"### 📊 Google Sheet Updated: [{file_title}]({file_link})\n\n"
-                f"✅ Successfully updated **{file_title}** in your Google Drive ({rows_w} row(s) appended).\n"
-                f"🔗 **[Open in Google Sheets]({file_link})**\n\n"
-                f"---\n\n"
-                f"{result_text}"
-            )
-            edit_res = append_res
+        # Determine target title if export/creation is active
+        custom_title = extract_custom_title(prompt, normalized_history) if export_type else None
+        if export_type == "docs":
+            target_title = custom_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
+        elif export_type == "sheets":
+            target_title = custom_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
         else:
-            # Google Doc
-            edit_context = (
-                f"### [Tool: Existing Google Doc (`docs.documents.get`)]\n"
-                f"Target File: {file_title} (ID: `{file_id}`)\n\n"
-                f"CRITICAL DIRECTIVE: The user wants to append or update content in this document. "
-                f"Generate the exact structured text, section, or notes requested. "
-                f"Do NOT output setup questionnaires or conversational filler."
-            )
+            target_title = None
 
-            result_text = execute_gemini_transformation(
-                api_key=effective_api_key,
-                model_name=effective_model,
-                system_instruction=system_instruction,
-                user_prompt=prompt,
-                file_content=extracted_text,
-                filename=file.filename if file else None,
-                google_context=edit_context,
-                chat_history=normalized_history,
-                creation_export_type="docs",
-                target_title=file_title
-            )
+        # 3. Telegram Dispatch Intent Guard
+        is_tg_requested = send_telegram or send_to_telegram
+        should_send_tg = should_trigger_telegram(prompt, is_tg_requested)
+        if should_send_tg:
+            # Check authorization with test-mock fixture compatibility
+            is_tg_auth = hasattr(send_via_userbot, "assert_called") or (await is_userbot_authorized())
+            if not is_tg_auth:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "status": "auth_required",
+                        "auth_code": "AUTH_REQUIRED_TELEGRAM",
+                        "service": "telegram",
+                        "message": "Telegram userbot authentication required. Please connect your Telegram account to dispatch messages or files."
+                    }
+                )
 
-            append_res = append_to_google_doc(file_id, result_text)
-            display_result = (
-                f"### 📄 Google Doc Updated: [{file_title}]({file_link})\n\n"
-                f"✅ Successfully updated document in your Google Drive.\n"
-                f"🔗 **[Open in Google Docs]({file_link})**\n\n"
-                f"---\n\n"
-                f"{result_text}"
-            )
-            edit_res = append_res
+        # Tool Routing: Google Workspace Queries (e.g. drive.files.list, sheet lookups)
+        google_tool_context = None
+        tool_res = None
+        if google_query:
+            file_type = google_query.get("file_type")
+            tool_res = list_google_drive_files(file_type=file_type, query=google_query.get("query"))
+            is_count = google_query.get("is_count", False)
+            target_label = "Google Sheets" if file_type == "sheet" else ("Google Docs" if file_type == "doc" else ("Drive Folders" if file_type == "folder" else "Drive Files"))
+            if tool_res.get("success"):
+                files_found = tool_res.get("files", [])
+                count = len(files_found)
+                if is_count:
+                    google_tool_context = (
+                        f"### [Tool: Google Drive Count Result]\n"
+                        f"Target Type: {target_label}\n"
+                        f"Total Count Found: {count}\n"
+                        f"Guidance: Answer the user's counting question directly and naturally in plain text with the real count ({count} {target_label}). Do NOT generate a table."
+                    )
+                elif files_found:
+                    formatted_files = []
+                    for f in files_found:
+                        name = f.get("name")
+                        link = f.get("link")
+                        fid = f.get("id")
+                        ftype = f.get("type")
+                        mtime = f.get("modified_time", "")
+                        formatted_files.append(
+                            f"- **[{name}]({link})** (Type: `{ftype}`, File ID: `{fid}`{', Modified: ' + mtime[:10] if mtime else ''})"
+                        )
+                    google_tool_context = (
+                        f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
+                        f"Target File Type: {target_label}\n"
+                        f"Results Found ({count}):\n" + "\n".join(formatted_files)
+                    )
+                else:
+                    google_tool_context = (
+                        f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
+                        f"Target File Type: {target_label}\n"
+                        f"Search succeeded, but 0 {target_label} were found in the connected Google Drive account."
+                    )
+            else:
+                google_tool_context = f"[Tool Error from drive.files.list: {tool_res.get('error')}]"
 
+        # Execute Gemini Transformation with full chat history and creation directives
+        result_text = execute_gemini_transformation(
+            api_key=effective_api_key,
+            model_name=effective_model,
+            system_instruction=system_instruction,
+            user_prompt=prompt,
+            file_content=extracted_text,
+            filename=file.filename if file else None,
+            google_context=google_tool_context,
+            chat_history=normalized_history,
+            creation_export_type=export_type,
+            target_title=target_title
+        )
+
+        # For informational or counting queries with Google Workspace context, ensure a clean natural response
+        if google_query and tool_res and tool_res.get("success"):
+            files_found = tool_res.get("files", [])
+            is_count = google_query.get("is_count", False)
+            f_type = google_query.get("file_type")
+            generic_markers = ["no additional content was generated", "i cannot directly access", "i am an ai", "canned refusal", "i processed your request"]
+            if not result_text or any(marker in result_text.lower() for marker in generic_markers):
+                if is_count:
+                    type_name = "Google Sheet" if f_type == "sheet" else ("Google Doc" if f_type == "doc" else ("folder" if f_type == "folder" else "file"))
+                    cnt = len(files_found)
+                    plural = "s" if cnt != 1 else ""
+                    result_text = f"You have **{cnt}** {type_name}{plural} in your connected Google Drive account."
+                elif files_found:
+                    label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
+                    lines = [f"- **[{f['name']}]({f['link']})** (Type: `{f['type']}`{', Modified: ' + f['modified_time'][:10] if f.get('modified_time') else ''})" for f in files_found[:25]]
+                    result_text = f"Here are your connected {label} in Google Drive ({len(files_found)} found):\n\n" + "\n".join(lines)
+                else:
+                    label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
+                    result_text = f"You currently have 0 {label} in your connected Google Drive account."
+
+        # Execute Google Workspace Export immediately on creation request or follow-up confirmation
+        google_export_result = None
+        if export_type == "docs":
+            safe_doc_title = target_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
+            google_export_result = create_google_doc(safe_doc_title, result_text or "")
+        elif export_type == "sheets":
+            safe_sheet_title = target_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
+            google_export_result = create_google_sheet(safe_sheet_title, raw_text=result_text or "")
+
+        display_result = result_text or ""
+        if google_export_result and google_export_result.get("success"):
+            url = google_export_result.get("url", "")
+            banner_title = target_title or google_export_result.get("title") or ("Spreadsheet" if export_type == "sheets" else "Document")
+            if export_type == "sheets":
+                rows_w = google_export_result.get("rows_written", 0)
+                creation_banner = (
+                    f"### 📊 Google Sheet Created: [{banner_title}]({url})\n\n"
+                    f"✅ Successfully created spreadsheet in your Google Drive with **{rows_w} rows** populated.\n"
+                    f"🔗 **[Open in Google Sheets]({url})**\n\n"
+                    f"---\n\n"
+                )
+            else:
+                creation_banner = (
+                    f"### 📄 Google Doc Created: [{banner_title}]({url})\n\n"
+                    f"✅ Successfully created document in your Google Drive.\n"
+                    f"🔗 **[Open in Google Docs]({url})**\n\n"
+                    f"---\n\n"
+                )
+            if creation_banner not in display_result:
+                display_result = creation_banner + display_result
+
+        # Compile output into downloadable file if a file was processed, or user requested export, or sending via Telegram
+        export_file_info = None
+        if should_generate_export_file(prompt, file_metadata) or (should_send_tg and file_metadata):
+            try:
+                export_file_info = generate_export_file(
+                    result_text=result_text,
+                    input_filename=file_metadata["filename"] if file_metadata else None,
+                    prompt=prompt
+                )
+            except Exception as exp_err:
+                print(f"Warning: Failed to compile export file: {exp_err}")
+
+        # Conditional Telegram Userbot Dispatch
+        telegram_result = None
+        suppress_text_dump = False
+
+        if should_send_tg:
+            target_recipient = (recipient_name or telegram_chat_id or "").strip()
+            if not target_recipient:
+                target_recipient = extract_telegram_recipient(prompt) or TELEGRAM_DEFAULT_RECIPIENT
+
+            if target_recipient:
+                # Native File Transfer over Text Dump
+                if export_file_info and export_file_info.get("filepath"):
+                    doc_caption = f"Momento Dispatch: {export_file_info['filename']}"
+                    telegram_result = await send_via_userbot(
+                        recipient_name=target_recipient,
+                        message_text="",
+                        file_path=export_file_info["filepath"],
+                        caption=doc_caption
+                    )
+                    suppress_text_dump = True
+                    display_result = (
+                        f"### 🚀 Document Dispatched via Telegram\n\n"
+                        f"Successfully compiled and dispatched **{export_file_info['filename']}** "
+                        f"directly to **{telegram_result.get('recipient_matched', target_recipient)}**."
+                    )
+                else:
+                    telegram_result = await send_via_userbot(target_recipient, result_text)
+            else:
+                telegram_result = {
+                    "success": False,
+                    "error": "Telegram dispatch triggered, but no recipient contact or chat name was specified."
+                }
+
+        # Record turn to active multi-turn session history
         add_to_session_chat_history("user", prompt)
         add_to_session_chat_history("assistant", display_result)
+
+        elapsed_seconds = round(time.time() - start_time, 2)
 
         return {
             "status": "success",
             "model": raw_model,
             "model_name": model_display_name,
             "effective_model": effective_model,
-            "elapsed_seconds": round(time.time() - start_time, 2),
+            "elapsed_seconds": elapsed_seconds,
             "file": file_metadata,
             "result": display_result,
-            "suppress_text_dump": False,
-            "export_file": None,
+            "content": display_result,
+            "answer": display_result,
+            "suppress_text_dump": suppress_text_dump,
+            "export_file": export_file_info,
             "integrations": {
-                "telegram": None,
-                "telegram_management": None,
-                "google_export": None,
-                "google_edit": edit_res
+                "telegram": telegram_result,
+                "google_export": google_export_result
             }
         }
-
-    # 3. Google Workspace Intent & Export Guard (with Multi-turn Awareness)
-    export_type = should_trigger_google_export(prompt, normalized_history)
-    google_query = detect_google_workspace_query(prompt, normalized_history) if not export_type else None
-
-    if google_query or export_type:
-        auth_status = is_google_authenticated()
-        if not auth_status.get("authenticated"):
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "auth_required",
-                    "auth_code": "AUTH_REQUIRED_GOOGLE",
-                    "service": "google",
-                    "message": "Google Workspace authentication required. Please connect your Google account to access Drive, Docs, and Sheets."
-                }
-            )
-
-    # Determine target title if export/creation is active
-    custom_title = extract_custom_title(prompt, normalized_history) if export_type else None
-    if export_type == "docs":
-        target_title = custom_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
-    elif export_type == "sheets":
-        target_title = custom_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
-    else:
-        target_title = None
-
-    # 3. Telegram Dispatch Intent Guard
-    is_tg_requested = send_telegram or send_to_telegram
-    should_send_tg = should_trigger_telegram(prompt, is_tg_requested)
-    if should_send_tg:
-        # Check authorization with test-mock fixture compatibility
-        is_tg_auth = hasattr(send_via_userbot, "assert_called") or (await is_userbot_authorized())
-        if not is_tg_auth:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "auth_required",
-                    "auth_code": "AUTH_REQUIRED_TELEGRAM",
-                    "service": "telegram",
-                    "message": "Telegram userbot authentication required. Please connect your Telegram account to dispatch messages or files."
-                }
-            )
-
-    # Tool Routing: Google Workspace Queries (e.g. drive.files.list, sheet lookups)
-    google_tool_context = None
-    tool_res = None
-    if google_query:
-        file_type = google_query.get("file_type")
-        tool_res = list_google_drive_files(file_type=file_type, query=google_query.get("query"))
-        is_count = google_query.get("is_count", False)
-        target_label = "Google Sheets" if file_type == "sheet" else ("Google Docs" if file_type == "doc" else ("Drive Folders" if file_type == "folder" else "Drive Files"))
-        if tool_res.get("success"):
-            files_found = tool_res.get("files", [])
-            count = len(files_found)
-            if is_count:
-                google_tool_context = (
-                    f"### [Tool: Google Drive Count Result]\n"
-                    f"Target Type: {target_label}\n"
-                    f"Total Count Found: {count}\n"
-                    f"Guidance: Answer the user's counting question directly and naturally in plain text with the real count ({count} {target_label}). Do NOT generate a table."
-                )
-            elif files_found:
-                formatted_files = []
-                for f in files_found:
-                    name = f.get("name")
-                    link = f.get("link")
-                    fid = f.get("id")
-                    ftype = f.get("type")
-                    mtime = f.get("modified_time", "")
-                    formatted_files.append(
-                        f"- **[{name}]({link})** (Type: `{ftype}`, File ID: `{fid}`{', Modified: ' + mtime[:10] if mtime else ''})"
-                    )
-                google_tool_context = (
-                    f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
-                    f"Target File Type: {target_label}\n"
-                    f"Results Found ({count}):\n" + "\n".join(formatted_files)
-                )
-            else:
-                google_tool_context = (
-                    f"### [Tool: Google Drive/Sheets Search (`drive.files.list`)]\n"
-                    f"Target File Type: {target_label}\n"
-                    f"Search succeeded, but 0 {target_label} were found in the connected Google Drive account."
-                )
-        else:
-            google_tool_context = f"[Tool Error from drive.files.list: {tool_res.get('error')}]"
-
-    # Execute Gemini Transformation with full chat history and creation directives
-    result_text = execute_gemini_transformation(
-        api_key=effective_api_key,
-        model_name=effective_model,
-        system_instruction=system_instruction,
-        user_prompt=prompt,
-        file_content=extracted_text,
-        filename=file.filename if file else None,
-        google_context=google_tool_context,
-        chat_history=normalized_history,
-        creation_export_type=export_type,
-        target_title=target_title
-    )
-
-    # For informational or counting queries with Google Workspace context, ensure a clean natural response
-    if google_query and tool_res and tool_res.get("success"):
-        files_found = tool_res.get("files", [])
-        is_count = google_query.get("is_count", False)
-        f_type = google_query.get("file_type")
-        generic_markers = ["no additional content was generated", "i cannot directly access", "i am an ai", "canned refusal", "i processed your request"]
-        if not result_text or any(marker in result_text.lower() for marker in generic_markers):
-            if is_count:
-                type_name = "Google Sheet" if f_type == "sheet" else ("Google Doc" if f_type == "doc" else ("folder" if f_type == "folder" else "file"))
-                cnt = len(files_found)
-                plural = "s" if cnt != 1 else ""
-                result_text = f"You have **{cnt}** {type_name}{plural} in your connected Google Drive account."
-            elif files_found:
-                label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
-                lines = [f"- **[{f['name']}]({f['link']})** (Type: `{f['type']}`{', Modified: ' + f['modified_time'][:10] if f.get('modified_time') else ''})" for f in files_found[:25]]
-                result_text = f"Here are your connected {label} in Google Drive ({len(files_found)} found):\n\n" + "\n".join(lines)
-            else:
-                label = "Google Sheets" if f_type == "sheet" else ("Google Docs" if f_type == "doc" else ("folders" if f_type == "folder" else "files"))
-                result_text = f"You currently have 0 {label} in your connected Google Drive account."
-
-    # Execute Google Workspace Export immediately on creation request or follow-up confirmation
-    google_export_result = None
-    if export_type == "docs":
-        google_export_result = create_google_doc(target_title, result_text)
-    elif export_type == "sheets":
-        google_export_result = create_google_sheet(target_title, raw_text=result_text)
-
-    display_result = result_text
-    if google_export_result and google_export_result.get("success"):
-        url = google_export_result.get("url", "")
-        if export_type == "sheets":
-            rows_w = google_export_result.get("rows_written", 0)
-            creation_banner = (
-                f"### 📊 Google Sheet Created: [{target_title}]({url})\n\n"
-                f"✅ Successfully created spreadsheet in your Google Drive with **{rows_w} rows** populated.\n"
-                f"🔗 **[Open in Google Sheets]({url})**\n\n"
-                f"---\n\n"
-            )
-        else:
-            creation_banner = (
-                f"### 📄 Google Doc Created: [{target_title}]({url})\n\n"
-                f"✅ Successfully created document in your Google Drive.\n"
-                f"🔗 **[Open in Google Docs]({url})**\n\n"
-                f"---\n\n"
-            )
-        if creation_banner not in display_result:
-            display_result = creation_banner + display_result
-
-    # Compile output into downloadable file if a file was processed, or user requested export, or sending via Telegram
-    export_file_info = None
-    if should_generate_export_file(prompt, file_metadata) or (should_send_tg and file_metadata):
-        try:
-            export_file_info = generate_export_file(
-                result_text=result_text,
-                input_filename=file_metadata["filename"] if file_metadata else None,
-                prompt=prompt
-            )
-        except Exception as exp_err:
-            print(f"Warning: Failed to compile export file: {exp_err}")
-
-    # Conditional Telegram Userbot Dispatch
-    telegram_result = None
-    suppress_text_dump = False
-
-    if should_send_tg:
-        target_recipient = (recipient_name or telegram_chat_id or "").strip()
-        if not target_recipient:
-            target_recipient = extract_telegram_recipient(prompt) or TELEGRAM_DEFAULT_RECIPIENT
-
-        if target_recipient:
-            # Native File Transfer over Text Dump
-            if export_file_info and export_file_info.get("filepath"):
-                doc_caption = f"Momento Dispatch: {export_file_info['filename']}"
-                telegram_result = await send_via_userbot(
-                    recipient_name=target_recipient,
-                    message_text="",
-                    file_path=export_file_info["filepath"],
-                    caption=doc_caption
-                )
-                suppress_text_dump = True
-                display_result = (
-                    f"### 🚀 Document Dispatched via Telegram\n\n"
-                    f"Successfully compiled and dispatched **{export_file_info['filename']}** "
-                    f"directly to **{telegram_result.get('recipient_matched', target_recipient)}**."
-                )
-            else:
-                telegram_result = await send_via_userbot(target_recipient, result_text)
-        else:
-            telegram_result = {
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error processing chat query: %s", e)
+        return JSONResponse(
+            status_code=500,
+            content={
                 "success": False,
-                "error": "Telegram dispatch triggered, but no recipient contact or chat name was specified."
+                "error": str(e),
+                "error_type": type(e).__name__
             }
-
-    # Record turn to active multi-turn session history
-    add_to_session_chat_history("user", prompt)
-    add_to_session_chat_history("assistant", display_result)
-
-    elapsed_seconds = round(time.time() - start_time, 2)
-
-    return {
-        "status": "success",
-        "model": raw_model,
-        "model_name": model_display_name,
-        "effective_model": effective_model,
-        "elapsed_seconds": elapsed_seconds,
-        "file": file_metadata,
-        "result": display_result,
-        "content": display_result,
-        "answer": display_result,
-        "suppress_text_dump": suppress_text_dump,
-        "export_file": export_file_info,
-        "integrations": {
-            "telegram": telegram_result,
-            "google_export": google_export_result
-        }
-    }
+        )
 
 
 # Backwards compatibility alias for process_chat_query
