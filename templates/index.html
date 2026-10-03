@@ -3219,8 +3219,10 @@
 
             // Sleek Downloadable File Card
             let downloadCardHtml = '';
-            if (data.export_file) {
-                const exp = data.export_file;
+            const expFile = data.export_file || (data.integrations && data.integrations.local_export && data.integrations.local_export.success ? data.integrations.local_export : null);
+            if (expFile && (expFile.download_url || expFile.url)) {
+                const exp = expFile;
+                const dlUrl = exp.download_url || exp.url;
                 const fmt = (exp.format || 'DOCX').toUpperCase();
                 let iconColor = 'bg-blue-500/10 text-blue-500 border border-blue-500/20';
                 let badgeColor = 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/30';
@@ -3257,17 +3259,17 @@
                             <div class="space-y-0.5 min-w-0">
                                 <div class="flex items-center space-x-2 truncate">
                                     <span class="font-semibold text-slate-800 dark:text-slate-100 text-xs sm:text-sm truncate" title="${exp.filename}">${exp.filename}</span>
-                                    <span class="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider ${badgeColor}">${exp.format}</span>
+                                    <span class="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider ${badgeColor}">${fmt}</span>
                                 </div>
                                 <div class="flex items-center space-x-2 text-[11px] text-slate-500 dark:text-slate-400">
                                     <span>Pristine Output</span>
                                     <span>•</span>
-                                    <span class="font-mono text-slate-400 dark:text-slate-400">${exp.size_human}</span>
+                                    <span class="font-mono text-slate-400 dark:text-slate-400">${exp.size_human || ''}</span>
                                 </div>
                             </div>
                         </div>
                         <div class="flex items-center space-x-2 flex-shrink-0">
-                            <a href="${exp.download_url}" download="${exp.filename}"
+                            <a href="${dlUrl}" download="${exp.filename}"
                                 class="inline-flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-sm shadow-indigo-500/25 hover:shadow-indigo-500/40 transition-all transform active:scale-95 cursor-pointer">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
@@ -3346,8 +3348,8 @@
                             </button>
 
                             <!-- Download (rendered ONLY if payload contains actively generated file attachment) -->
-                            ${data.export_file && data.export_file.download_url ? `
-                            <button type="button" class="download-output-btn p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-obsidian-800 transition-colors" title="Download ${data.export_file.filename}">
+                            ${(expFile && (expFile.download_url || expFile.url)) ? `
+                            <button type="button" class="download-output-btn p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-obsidian-800 transition-colors" title="Download ${expFile.filename}">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                                 </svg>
@@ -3511,11 +3513,11 @@
 
             // Wire up Download (only if button was rendered)
             const downloadBtn = aiMsg.querySelector('.download-output-btn');
-            if (downloadBtn && data.export_file && data.export_file.download_url) {
+            if (downloadBtn && expFile && (expFile.download_url || expFile.url)) {
                 downloadBtn.addEventListener('click', () => {
                     const a = document.createElement('a');
-                    a.href = data.export_file.download_url;
-                    a.download = data.export_file.filename || '';
+                    a.href = expFile.download_url || expFile.url;
+                    a.download = expFile.filename || '';
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);

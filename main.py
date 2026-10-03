@@ -960,8 +960,9 @@ def _check_direct_creation_intent(prompt: str) -> Optional[str]:
         r"\b(?:create|export|save|generate|make|upload|push|write)\b.*?\b(?:to|as|a|new|into)?\s*(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b",
         r"\b(?:export\s+to|save\s+(?:as|to)|create\s+(?:a\s+)?(?:new\s+)?|make\s+(?:a\s+)?(?:new\s+)?|generate\s+(?:a\s+)?(?:new\s+)?)\b.*?\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b",
         r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdoc|gdocs|gsheet|gsheets)\b.*?\b(?:export|creation|create)\b",
-        r"\b(?:create|make|generate)\s+(?:a\s+)?(?:new\s+)?(?:one|file|sheet|spreadsheet|doc|document)\b",
-        r"\b(?:can\s+(?:you|u)\s+)?(?:create|make|generate)\s+(?:a\s+)?(?:sheet|spreadsheet|doc|document)\b"
+        r"\b(?:create|make|generate|build|write|export|produce)\s+(?:a\s+)?(?:new\s+)?(?:one|file|sheet|spreadsheet|doc|document|pdf|table)\b",
+        r"\b(?:can\s+(?:you|u)\s+)?(?:create|make|generate|build|export)\s+(?:a\s+)?(?:sheet|spreadsheet|doc|document|pdf|table|notes)\b",
+        r"\b(?:export|convert|save)\s+(?:to|as)\s+(?:pdf|docx|xlsx|ods|csv|doc|sheet)\b"
     ]
 
     has_create_intent = any(re.search(pat, p_lower) for pat in explicit_create_patterns)
@@ -972,9 +973,11 @@ def _check_direct_creation_intent(prompt: str) -> Optional[str]:
     if re.search(r"\b(?:did\s+(?:you|i)|can\s+you\s+see|check\s+if)\b", p_lower):
         return None
 
-    if re.search(r"\b(?:google\s+docs?|gdocs?|docs?|documents?)\b", p_lower) and not re.search(r"\b(?:sheets?|spreadsheets?)\b", p_lower):
+    if re.search(r"\b(?:pdf|pdfs)\b", p_lower) and not re.search(r"\b(?:sheets?|spreadsheets?|xlsx|ods|csv)\b", p_lower):
+        return "pdf"
+    elif re.search(r"\b(?:google\s+docs?|gdocs?|docs?|documents?|docx)\b", p_lower) and not re.search(r"\b(?:sheets?|spreadsheets?|xlsx|ods|csv)\b", p_lower):
         return "docs"
-    elif re.search(r"\b(?:google\s+sheets?|google\s+spreadsheets?|gsheets?|sheets?|spreadsheets?)\b", p_lower):
+    elif re.search(r"\b(?:google\s+sheets?|google\s+spreadsheets?|gsheets?|sheets?|spreadsheets?|xlsx|ods|csv|table)\b", p_lower):
         return "sheets"
     elif "one" in p_lower or "file" in p_lower:
         return "sheets"
@@ -1292,6 +1295,79 @@ def should_generate_export_file(prompt: str, file_metadata: Optional[Dict[str, A
 
 
 # ==============================================================================
+# Local Office Engine Tools for Gemini
+# ==============================================================================
+
+def get_local_office_tools() -> List[Any]:
+    """
+    Construct Google GenAI Tool declarations for local office generation endpoints:
+    - /api/local/export/doc
+    - /api/local/export/sheet
+    - /api/local/export/pdf
+    """
+    try:
+        from google.genai import types
+
+        doc_func = types.FunctionDeclaration(
+            name="export_local_doc",
+            description=(
+                "Generate and export a formatted document locally on the server as .docx or .pdf using our self-hosted "
+                "headless LibreOffice engine (/api/local/export/doc). Invoke this tool instead of suggesting external cloud "
+                "links whenever the user requests creating, generating, or exporting a document or notes."
+            ),
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "title": types.Schema(type="STRING", description="Title of the document to create."),
+                    "content": types.Schema(type="STRING", description="Full document text formatted in clean Markdown with headings and paragraphs."),
+                    "format": types.Schema(type="STRING", enum=["docx", "pdf"], description="Export file format: 'docx' (default) or 'pdf'.")
+                },
+                required=["title", "content"]
+            )
+        )
+
+        sheet_func = types.FunctionDeclaration(
+            name="export_local_sheet",
+            description=(
+                "Generate and export a spreadsheet locally on the server as .xlsx, .ods, or .csv using our self-hosted "
+                "headless LibreOffice engine (/api/local/export/sheet). Invoke this tool instead of suggesting external cloud "
+                "links whenever the user requests creating, generating, or exporting a spreadsheet, table, or dataset."
+            ),
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "title": types.Schema(type="STRING", description="Title of the spreadsheet to create."),
+                    "content": types.Schema(type="STRING", description="Markdown table or CSV data rows for the spreadsheet."),
+                    "format": types.Schema(type="STRING", enum=["xlsx", "ods", "csv"], description="Export file format: 'xlsx' (default), 'ods', or 'csv'.")
+                },
+                required=["title", "content"]
+            )
+        )
+
+        pdf_func = types.FunctionDeclaration(
+            name="export_local_pdf",
+            description=(
+                "Generate and export a PDF document locally on the server using our self-hosted headless LibreOffice "
+                "engine (/api/local/export/pdf). Invoke this tool instead of suggesting external cloud links whenever "
+                "the user requests creating or exporting a PDF."
+            ),
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "title": types.Schema(type="STRING", description="Title of the PDF document to create."),
+                    "content": types.Schema(type="STRING", description="Markdown or HTML formatted content to convert to PDF.")
+                },
+                required=["title", "content"]
+            )
+        )
+
+        return [types.Tool(function_declarations=[doc_func, sheet_func, pdf_func])]
+    except Exception as e:
+        logger.warning("Could not construct local office tool declarations: %s", e)
+        return []
+
+
+# ==============================================================================
 # Gemini Transformation Engine
 # ==============================================================================
 
@@ -1342,26 +1418,41 @@ def execute_gemini_transformation(
                 f"```\n{file_content}\n```\n"
             )
 
+        # Check if Google Workspace export was explicitly requested
+        is_explicit_google = bool(
+            re.search(r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdocs?|gsheets?)\b", user_prompt, re.IGNORECASE)
+            or (chat_history and any(
+                re.search(r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdocs?|gsheets?)\b", m.get("content", ""), re.IGNORECASE)
+                for m in chat_history[-3:]
+            ))
+        )
+
         if creation_export_type == "sheets":
+            target_engine = "Google Spreadsheet" if is_explicit_google else "Local Office Spreadsheet (.xlsx / .ods / .csv)"
+            endpoint_notice = "This Markdown table will be converted directly into the user's spreadsheet file using our local office engine (/api/local/export/sheet)." if not is_explicit_google else "This Markdown table will be parsed and written directly into the user's Google Sheet."
             prompt_parts.append(
-                f"### MANDATORY ACTION DIRECTIVE: IMMEDIATE GOOGLE SPREADSHEET CREATION\n"
+                f"### MANDATORY ACTION DIRECTIVE: IMMEDIATE SPREADSHEET GENERATION ({target_engine})\n"
                 f"Target Spreadsheet Title: '{target_title or 'Spreadsheet'}'\n"
-                f"The user has explicitly instructed or confirmed the creation of a Google Spreadsheet based on the prompt/conversation.\n"
+                f"The user has explicitly instructed or confirmed the creation of a spreadsheet based on the prompt/conversation.\n"
                 f"DO NOT ask clarifying questions. DO NOT ask what to include. DO NOT enter a questionnaire loop.\n"
                 f"You MUST immediately generate and output the complete, populated data table as a Markdown table "
                 f"with clear column headers and realistic, detailed data rows covering the requested topic from the conversation.\n"
-                f"This Markdown table will be parsed and written directly into the user's Google Sheet.\n"
+                f"{endpoint_notice}\n"
                 f"Provide a brief, polite confirmation before or after the table."
             )
-        elif creation_export_type == "docs":
+        elif creation_export_type in ("docs", "pdf"):
+            wants_pdf = creation_export_type == "pdf" or bool(re.search(r"\bpdf\b", user_prompt, re.IGNORECASE))
+            target_engine = "Google Document" if is_explicit_google else ("Local PDF Document (.pdf)" if wants_pdf else "Local Office Document (.docx / .pdf)")
+            endpoint_name = "/api/local/export/pdf" if wants_pdf else "/api/local/export/doc"
+            endpoint_notice = f"This content will be converted directly into the user's document file using our local office engine ({endpoint_name})." if not is_explicit_google else "This content will be written directly into the user's Google Doc."
             prompt_parts.append(
-                f"### MANDATORY ACTION DIRECTIVE: IMMEDIATE GOOGLE DOCUMENT CREATION\n"
+                f"### MANDATORY ACTION DIRECTIVE: IMMEDIATE DOCUMENT GENERATION ({target_engine})\n"
                 f"Target Document Title: '{target_title or 'Document'}'\n"
-                f"The user has explicitly instructed or confirmed the creation of a Google Document based on the prompt/conversation.\n"
+                f"The user has explicitly instructed or confirmed the creation of a document based on the prompt/conversation.\n"
                 f"DO NOT ask clarifying questions. DO NOT ask what to include. DO NOT enter a questionnaire loop.\n"
                 f"You MUST immediately generate and output the full, comprehensive document text with formatted headings, "
                 f"subsections, and detailed content covering the requested topic from the conversation.\n"
-                f"This content will be written directly into the user's Google Doc.\n"
+                f"{endpoint_notice}\n"
                 f"Provide a brief, polite confirmation before or after the document."
             )
 
@@ -1384,6 +1475,13 @@ def execute_gemini_transformation(
             except Exception:
                 pass
 
+        try:
+            local_tools = get_local_office_tools()
+            if local_tools:
+                tools_list.extend(local_tools)
+        except Exception as tool_err:
+            logger.warning("Could not append local office tools: %s", tool_err)
+
         config_kwargs = {
             "system_instruction": system_instruction,
             "temperature": 0.2,
@@ -1400,7 +1498,7 @@ def execute_gemini_transformation(
                 config=config,
             )
         except Exception as gen_err:
-            # If search-grounded call fails (e.g. AFC constraint or tool limitation), fall back to standard call
+            # If search-grounded or tool call fails (e.g. AFC constraint or tool limitation), fall back to standard call
             if tools_list:
                 config_fallback = types.GenerateContentConfig(
                     system_instruction=system_instruction,
@@ -1438,9 +1536,19 @@ def execute_gemini_transformation(
             if cand.content and cand.content.parts:
                 for p in cand.content.parts:
                     if hasattr(p, "function_call") and p.function_call:
-                        call_args = dict(p.function_call.args or {})
-                        text_out = f"### [Tool Request: {p.function_call.name}]\n\n```json\n{json.dumps(call_args, indent=2)}\n```"
-                        break
+                        call_name = getattr(p.function_call, "name", "")
+                        call_args = dict(getattr(p.function_call, "args", {}) or {})
+                        if call_name in ("export_local_doc", "export_local_sheet", "export_local_pdf"):
+                            content_arg = call_args.get("content", "")
+                            title_arg = call_args.get("title", "")
+                            if content_arg:
+                                text_out = content_arg
+                            else:
+                                text_out = f"### {title_arg or 'Local Office Export'}\n\nGenerated content for {title_arg}."
+                            break
+                        else:
+                            text_out = f"### [Tool Request: {call_name}]\n\n```json\n{json.dumps(call_args, indent=2)}\n```"
+                            break
 
         # Fallback 3: Clean natural response (never render a generic data table for informational queries)
         if not text_out or not text_out.strip():
@@ -1454,7 +1562,7 @@ def execute_gemini_transformation(
                     f"| Secondary Specification | High-performance benchmarks | Verified |\n"
                     f"| Additional Attributes | Key feature parameters | Verified |\n"
                 )
-            elif creation_export_type == "docs":
+            elif creation_export_type in ("docs", "pdf"):
                 text_out = (
                     f"# {target_title or 'Document'}\n\n"
                     f"## Overview\n"
@@ -2258,16 +2366,24 @@ async def process_chat_query(
 
         # Construct System Instruction
         system_instruction = (
-            "You are Momento, a fully autonomous digital employee with direct access to the user's connected "
-            "Google Workspace (Drive, Docs, Sheets). When the user asks about their files or spreadsheets "
-            "(e.g., 'what sheets in google do I have'), you MUST use the Google Drive/Sheets search tool to find "
-            "their actual, real files, list them out clearly with clickable Markdown links and bullet points, "
-            "and proactively invite the user to select, examine, summarize, edit, or transform them. "
-            "Always present their actual dynamic files from Drive. Never default to, fabricate, or lock onto placeholder "
-            "names like 'Momento Sheet'. "
-            "Never create a new Google Sheet or Document unless the user explicitly and directly instructs you to create or export one. "
-            "Never give canned refusals saying you are an AI or cannot access external files. You have live Google Workspace API access. "
-            "When files are retrieved, format them clearly with clickable Markdown links and bullet points."
+            "You are Momento, a fully autonomous digital employee with a powerful self-hosted local office generation "
+            "engine powered by headless LibreOffice, as well as direct access to the user's connected Google Workspace (Drive, Docs, Sheets).\n\n"
+            "### LOCAL OFFICE ENGINE & FILE GENERATION CAPABILITIES:\n"
+            "- You have a complete, native, self-hosted file generation and export engine running directly on this server.\n"
+            "- You CAN and DO generate real, downloadable documents (.docx, .pdf) and spreadsheets (.xlsx, .ods, .csv) locally on the server.\n"
+            "- NEVER say you cannot create files locally, cannot access the local filesystem, or that you must use Google Docs/Sheets or third-party cloud tools to create files.\n"
+            "- You have direct access to local office generation endpoints on this server:\n"
+            "  * Document Generation: POST /api/local/export/doc (generates pristine .docx or converts to .pdf via headless LibreOffice)\n"
+            "  * Spreadsheet Generation: POST /api/local/export/sheet (generates enterprise-styled .xlsx, .ods, or .csv)\n"
+            "  * PDF Generation: POST /api/local/export/pdf (generates clean .pdf via headless LibreOffice)\n"
+            "- Whenever the user asks to create, generate, make, or export a document, spreadsheet, or PDF (e.g., 'create a doc', 'make a spreadsheet', 'create a pdf', 'generate sales sheet'), you MUST generate the full, pristine, well-structured content immediately (structured Markdown for documents, Markdown table with clear column headers and data rows for spreadsheets). Our system automatically invokes the local office export endpoints (/api/local/export/doc, /api/local/export/sheet, /api/local/export/pdf) to compile your output into real downloadable files on the server and present direct download cards/buttons to the user.\n"
+            "- NEVER offer or suggest external Google Docs or Google Sheets cloud links for file creation requests unless the user explicitly asks for 'Google Docs' or 'Google Sheets'. Always prefer self-hosted local office generation (.docx, .pdf, .xlsx, .ods).\n\n"
+            "### GOOGLE WORKSPACE SEARCH & EDITING:\n"
+            "- When the user asks about their files or spreadsheets (e.g., 'what sheets in google do I have'), you MUST use the Google Drive/Sheets search tool to find their actual, real files, list them out clearly with clickable Markdown links and bullet points, and proactively invite the user to select, examine, summarize, edit, or transform them.\n"
+            "- Always present their actual dynamic files from Drive. Never default to, fabricate, or lock onto placeholder names like 'Momento Sheet'.\n"
+            "- Never create a new Google Sheet or Document unless the user explicitly and directly instructs you to create or export one.\n"
+            "- Never give canned refusals saying you are an AI or cannot access external files. You have live Google Workspace API access.\n"
+            "- When files are retrieved, format them clearly with clickable Markdown links and bullet points."
         )
 
         # ==========================================================================
@@ -2590,8 +2706,9 @@ async def process_chat_query(
 
         # Determine target title if export/creation is active
         custom_title = extract_custom_title(prompt, normalized_history) if export_type else None
-        if export_type == "docs":
-            target_title = custom_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
+        if export_type in ("docs", "pdf"):
+            default_label = "PDF Document" if export_type == "pdf" else "Document"
+            target_title = custom_title or (f"{file_metadata['filename']} - {default_label}" if file_metadata else f"{default_label} - {time.strftime('%Y-%m-%d')}")
         elif export_type == "sheets":
             target_title = custom_title or (f"{file_metadata['filename']} - Spreadsheet" if file_metadata else f"Spreadsheet - {time.strftime('%Y-%m-%d')}")
         else:
@@ -2695,14 +2812,21 @@ async def process_chat_query(
         local_export_result = None
         google_export_result = None
 
-        if export_type == "docs":
+        # Check whether Google Workspace export was explicitly requested by user
+        history_text = " ".join((m.get("content") or "") for m in (normalized_history or [])[-3:])
+        is_explicit_google = bool(
+            re.search(r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdocs?|gsheets?)\b", prompt, re.IGNORECASE)
+            or re.search(r"\b(?:google\s+(?:doc|docs|sheet|sheets|spreadsheet|spreadsheets)|gdocs?|gsheets?)\b", history_text, re.IGNORECASE)
+        )
+
+        if export_type in ("docs", "pdf"):
             safe_doc_title = target_title or (f"{file_metadata['filename']} - Document" if file_metadata else f"Document - {time.strftime('%Y-%m-%d')}")
-            wants_pdf = bool(re.search(r"\bpdf\b", prompt, re.IGNORECASE))
+            wants_pdf = bool(export_type == "pdf" or re.search(r"\bpdf\b", prompt, re.IGNORECASE))
             doc_fmt = "pdf" if wants_pdf else "docx"
             local_export_result = generate_local_doc(content=result_text or "", title=safe_doc_title, format=doc_fmt)
 
-            # If Google account is linked, also perform cloud export
-            if is_google_authenticated().get("authenticated"):
+            # If Google account is linked and user explicitly targeted Google, perform cloud export
+            if is_explicit_google and is_google_authenticated().get("authenticated"):
                 google_export_result = create_google_doc(safe_doc_title, result_text or "")
             else:
                 google_export_result = local_export_result
@@ -2713,14 +2837,14 @@ async def process_chat_query(
             sheet_fmt = "ods" if wants_ods else ("csv" if wants_csv else "xlsx")
             local_export_result = generate_local_spreadsheet(content_or_matrix=result_text or "", title=safe_sheet_title, format=sheet_fmt)
 
-            # If Google account is linked, also perform cloud export
-            if is_google_authenticated().get("authenticated"):
+            # If Google account is linked and user explicitly targeted Google, perform cloud export
+            if is_explicit_google and is_google_authenticated().get("authenticated"):
                 google_export_result = create_google_sheet(safe_sheet_title, raw_text=result_text or "")
             else:
                 google_export_result = local_export_result
 
         display_result = result_text or ""
-        if google_export_result and google_export_result.get("success") and "docs.google.com" in str(google_export_result.get("url", "")):
+        if is_explicit_google and google_export_result and google_export_result.get("success") and "docs.google.com" in str(google_export_result.get("url", "")):
             cloud_url = google_export_result.get("url", "")
             banner_title = target_title or google_export_result.get("title") or ("Spreadsheet" if export_type == "sheets" else "Document")
             local_link = f"📥 **[Download Local Copy]({local_export_result.get('download_url')})**\n\n" if local_export_result and local_export_result.get("download_url") else ""
@@ -2746,13 +2870,20 @@ async def process_chat_query(
         elif local_export_result and local_export_result.get("success"):
             download_url = local_export_result.get("download_url") or local_export_result.get("url", "")
             banner_title = target_title or local_export_result.get("title") or ("Spreadsheet" if export_type == "sheets" else "Document")
-            fmt = local_export_result.get("format", "DOCX" if export_type == "docs" else "XLSX").upper()
+            fmt = local_export_result.get("format", "DOCX" if export_type == "docs" else ("PDF" if export_type == "pdf" else "XLSX")).upper()
             if export_type == "sheets":
                 rows_w = local_export_result.get("rows_written", 0)
                 creation_banner = (
                     f"### 📊 Local Spreadsheet Created: [{banner_title}]({download_url})\n\n"
                     f"✅ Successfully generated spreadsheet (**{rows_w} rows**) on server.\n"
                     f"📥 **[Download Spreadsheet ({fmt})]({download_url})**\n\n"
+                    f"---\n\n"
+                )
+            elif export_type == "pdf" or fmt == "PDF":
+                creation_banner = (
+                    f"### 📄 Local PDF Created: [{banner_title}]({download_url})\n\n"
+                    f"✅ Successfully generated local PDF document on server.\n"
+                    f"📥 **[Download PDF ({fmt})]({download_url})**\n\n"
                     f"---\n\n"
                 )
             else:

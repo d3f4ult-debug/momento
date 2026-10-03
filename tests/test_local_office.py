@@ -230,3 +230,61 @@ def test_process_chat_query_local_spreadsheet_creation():
 
         if data["export_file"].get("filepath") and os.path.exists(data["export_file"]["filepath"]):
             os.remove(data["export_file"]["filepath"])
+
+
+def test_system_instruction_empowers_local_office_engine():
+    from main import get_local_office_tools
+    with patch("main.is_google_authenticated", return_value={"authenticated": False}), \
+         patch("main.execute_gemini_transformation") as mock_gemini:
+        mock_gemini.return_value = "### Document\nSample content"
+
+        res = client.post("/api/process", data={
+            "prompt": "create a document for quarterly planning",
+            "custom_api_key": "test_key"
+        })
+        assert res.status_code == 200
+        assert mock_gemini.called
+        system_inst = mock_gemini.call_args.kwargs["system_instruction"]
+
+        # Ensure local office engine instructions are present
+        assert "self-hosted local office generation engine" in system_inst
+        assert "POST /api/local/export/doc" in system_inst
+        assert "POST /api/local/export/sheet" in system_inst
+        assert "POST /api/local/export/pdf" in system_inst
+        assert "NEVER say you cannot create files locally" in system_inst
+        assert "Always prefer self-hosted local office generation" in system_inst
+
+
+def test_get_local_office_tools_declarations():
+    from main import get_local_office_tools
+    tools = get_local_office_tools()
+    assert len(tools) == 1
+    func_decls = tools[0].function_declarations
+    assert len(func_decls) == 3
+    names = [f.name for f in func_decls]
+    assert "export_local_doc" in names
+    assert "export_local_sheet" in names
+    assert "export_local_pdf" in names
+
+
+def test_process_chat_query_creates_local_pdf():
+    with patch("main.is_google_authenticated", return_value={"authenticated": False}), \
+         patch("main.execute_gemini_transformation", return_value="# Executive Report\n\nQ3 Financial Summary"):
+
+        res = client.post("/api/process", data={
+            "prompt": "create a pdf for executive summary",
+            "custom_api_key": "test_key"
+        })
+
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["export_file"] is not None
+        assert "download_url" in data["export_file"]
+        # When PDF format is requested, local engine processes doc or pdf
+        assert data["export_file"]["format"] in ("PDF", "DOCX")
+        assert "Local PDF Created" in data["result"] or "Local Document Created" in data["result"]
+
+        if data["export_file"].get("filepath") and os.path.exists(data["export_file"]["filepath"]):
+            os.remove(data["export_file"]["filepath"])
+
