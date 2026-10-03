@@ -38,6 +38,24 @@ def cleanup_sessions_fixture():
     clear_all_sessions()
 
 
+def test_sandbox_router_mounted_on_app():
+    from services.windows_sandbox import sandbox_router as s_router
+    from main import sandbox_router as m_router
+    assert s_router is not None
+    assert m_router is not None
+
+    routes = [r.path for r in app.routes if hasattr(r, "path")]
+    assert "/api/sandbox/launch" in routes
+    assert "/api/sandbox/inspect" in routes
+    assert "/api/sandbox/execute" in routes
+    assert "/api/sandbox/sessions" in routes
+    assert "/api/sandbox/stop" in routes
+
+    # Direct client call verification
+    assert client.post("/api/sandbox/launch", json={}).status_code == 422
+    assert client.post("/api/sandbox/inspect", json={}).status_code == 422
+
+
 def test_detect_runtime():
     runtime = detect_runtime()
     assert runtime in ("native", "wine", "subprocess")

@@ -81,6 +81,7 @@ from services.windows_sandbox import (
     list_sessions,
     get_session,
     detect_runtime,
+    sandbox_router,
 )
 from services.binary_inspector import (
     inspect_session,
@@ -132,6 +133,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include Sandbox & Execution Engine Router
+app.include_router(sandbox_router)
 
 # Setup Templates (compatible with local development and PyInstaller bundles)
 BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
