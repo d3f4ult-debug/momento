@@ -75,6 +75,18 @@ from services.local_office import (
     EXPORTS_DIR,
     ensure_exports_dir,
 )
+from services.windows_sandbox import (
+    launch_binary,
+    terminate_session,
+    list_sessions,
+    get_session,
+    detect_runtime,
+)
+from services.binary_inspector import (
+    inspect_session,
+    execute_command_in_session,
+    get_sandbox_telemetry_summary,
+)
 
 # Load environment variables
 load_dotenv()
@@ -3238,6 +3250,154 @@ async def download_file_endpoint(file_identifier: str):
         filename=display_name,
         media_type=media_type
     )
+
+
+# ==============================================================================
+# Unified Sandbox & Execution Control API
+# ==============================================================================
+
+@app.post("/api/sandbox/launch")
+async def sandbox_launch_endpoint(
+    request: Request,
+    binary_path: Optional[str] = Form(None),
+    args: Optional[str] = Form(None),
+    timeout: Optional[int] = Form(300)
+):
+    """
+    Accepts an application path/payload, boots it headlessly inside an isolated
+    sandbox container/session, and returns a unique session identifier.
+    """
+    eff_binary = binary_path
+    eff_args = args
+    eff_timeout = timeout
+
+    # Support JSON payload
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            eff_binary = body.get("binary_path") or eff_binary
+            eff_args = body.get("args") or eff_args
+            eff_timeout = body.get("timeout", eff_timeout)
+        except Exception:
+            pass
+
+    if not eff_binary:
+        return JSONResponse(
+            status_code=422,
+            content={"success": False, "error": "Field 'binary_path' is required."}
+        )
+
+    arg_list = None
+    if eff_args:
+        if isinstance(eff_args, list):
+            arg_list = eff_args
+        elif isinstance(eff_args, str):
+            import shlex
+            try:
+                arg_list = shlex.split(eff_args)
+            except Exception:
+                arg_list = eff_args.split()
+
+    res = launch_binary(binary_path=eff_binary, args=arg_list, timeout=eff_timeout)
+    status_code = 200 if res.get("success") else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@app.post("/api/sandbox/inspect")
+async def sandbox_inspect_endpoint(
+    request: Request,
+    session_id: Optional[str] = Form(None)
+):
+    """
+    Queries state, execution metrics, and file interactions for an active sandbox session.
+    """
+    eff_session_id = session_id
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            eff_session_id = body.get("session_id") or eff_session_id
+        except Exception:
+            pass
+
+    if not eff_session_id:
+        return JSONResponse(
+            status_code=422,
+            content={"success": False, "error": "Field 'session_id' is required."}
+        )
+
+    res = inspect_session(eff_session_id)
+    status_code = 200 if res.get("success") else 404
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@app.post("/api/sandbox/execute")
+async def sandbox_execute_endpoint(
+    request: Request,
+    session_id: Optional[str] = Form(None),
+    command: Optional[str] = Form(None),
+    input_data: Optional[str] = Form(None)
+):
+    """
+    Triggers a specific deterministic command or hook against the target application
+    and returns raw JSON diagnostics.
+    """
+    eff_session_id = session_id
+    eff_command = command
+    eff_input_data = input_data
+
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            eff_session_id = body.get("session_id") or eff_session_id
+            eff_command = body.get("command") or eff_command
+            eff_input_data = body.get("input_data") or eff_input_data
+        except Exception:
+            pass
+
+    if not eff_session_id or not eff_command:
+        return JSONResponse(
+            status_code=422,
+            content={"success": False, "error": "Fields 'session_id' and 'command' are required."}
+        )
+
+    res = execute_command_in_session(
+        session_id=eff_session_id,
+        command=eff_command,
+        input_data=eff_input_data
+    )
+    status_code = 200 if res.get("success") else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@app.get("/api/sandbox/sessions")
+async def sandbox_sessions_endpoint():
+    """Retrieve high-level telemetry summary and active sessions in the sandbox engine."""
+    return get_sandbox_telemetry_summary()
+
+
+@app.post("/api/sandbox/stop")
+async def sandbox_stop_endpoint(
+    request: Request,
+    session_id: Optional[str] = Form(None),
+    force: Optional[bool] = Form(False)
+):
+    """Terminate or kill an active sandbox session."""
+    eff_session_id = session_id
+    eff_force = force
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            eff_session_id = body.get("session_id") or eff_session_id
+            eff_force = body.get("force", eff_force)
+        except Exception:
+            pass
+
+    if not eff_session_id:
+        return JSONResponse(status_code=422, content={"success": False, "error": "Field 'session_id' is required."})
+
+    res = terminate_session(eff_session_id, force=bool(eff_force))
+    status_code = 200 if res.get("success") else 404
+    return JSONResponse(status_code=status_code, content=res)
 
 
 if __name__ == "__main__":
