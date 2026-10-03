@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-Momento Control CLI
-===================
-Command-line interface for the Momento Windows Sandbox and Process Inspector.
-Communicates with the local FastAPI backend (/api/sandbox/...) over HTTP.
+Momento Control CLI & Local Client
+==================================
+Command-line interface and local client for Momento.
+Connects local workflows to the remote Momento VPS Sandbox backend.
 
 Usage:
+    momento setup [--force]
+    momento shell
+    momento open <app_name> [--args ...]
+    momento run <app_name> [--args ...]
+    momento scan [--json]
     momento launch <path/to/binary.exe> [--args ...] [--timeout 300] [--use-wine]
     momento inspect <session_id> [--json]
     momento sessions [--json]
     momento stop <session_id> [--force]
     momento execute <session_id> <command>
+    momento "Momento, open notepad"
 """
 
 import argparse
@@ -21,7 +27,24 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
 
-DEFAULT_API_URL = os.environ.get("MOMENTO_API_URL", "http://127.0.0.1:8000")
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from client.config import (
+    DEFAULT_BACKEND_URL,
+    get_backend_url,
+    is_setup_completed,
+    load_config,
+    save_config
+)
+from client.nlp_router import NLPRouter
+from client.onboarding import run_onboarding
+from client.scanner import AppScanner
+from client.shell import start_interactive_shell
+
+DEFAULT_API_URL = os.environ.get("MOMENTO_API_URL", DEFAULT_BACKEND_URL)
 
 
 def make_api_request(
@@ -218,11 +241,86 @@ def cmd_execute(args: argparse.Namespace, api_url: str) -> int:
         return 1
 
 
+def cmd_setup(args: argparse.Namespace, api_url: str) -> int:
+    """Run onboarding and permission setup wizard."""
+    success = run_onboarding(
+        force=getattr(args, "force", False),
+        non_interactive=getattr(args, "non_interactive", False),
+        backend_url=api_url
+    )
+    return 0 if success else 1
+
+
+def cmd_shell(args: argparse.Namespace, api_url: str) -> int:
+    """Start interactive conversational Momento shell."""
+    return start_interactive_shell(backend_url=api_url)
+
+
+def cmd_scan(args: argparse.Namespace, api_url: str) -> int:
+    """Scan and catalog local applications into registry."""
+    scanner = AppScanner()
+    reg = scanner.scan_environment()
+    if getattr(args, "json", False):
+        print(json.dumps(reg, indent=2))
+        return 0
+
+    apps = reg.get("apps", {})
+    total = reg.get("total_apps", len(apps))
+    print(f"[*] Local Environment Scan Complete ({total} applications discovered):")
+    print(f"    Registry: {scanner.registry_file}\n")
+    header = f"{'APP ID':<16} {'NAME':<24} {'CATEGORY':<12} {'BINARY PATH'}"
+    print(f"    {header}")
+    print(f"    {'-' * len(header)}")
+    for app_id, app in sorted(apps.items())[:30]:
+        name = app.get("name", app_id)
+        cat = app.get("category", "utility")
+        bpath = app.get("binary_path", "")
+        if len(bpath) > 40:
+            bpath = "..." + bpath[-37:]
+        print(f"    {app_id:<16} {name:<24} {cat:<12} {bpath}")
+    if len(apps) > 30:
+        print(f"\n    ... and {len(apps) - 30} more applications indexed.")
+    return 0
+
+
+def cmd_open_or_run(args: argparse.Namespace, api_url: str) -> int:
+    """Resolve application from local registry and launch on VPS execution core."""
+    app_query = args.app_name
+    if getattr(args, "args", None):
+        app_query += f" with args {' '.join(args.args)}"
+    router = NLPRouter(backend_url=api_url)
+    res = router.execute(f"open {app_query}")
+    msg = res.get("message", "")
+    if res.get("success"):
+        if msg:
+            print(msg)
+        return 0
+    else:
+        if msg:
+            print(f"[!] {msg}", file=sys.stderr)
+        return 1
+
+
+def cmd_ask(args: argparse.Namespace, api_url: str) -> int:
+    """Process natural language conversational command."""
+    router = NLPRouter(backend_url=api_url)
+    res = router.execute(args.query)
+    msg = res.get("message", "")
+    if res.get("success"):
+        if msg:
+            print(msg)
+        return 0
+    else:
+        if msg:
+            print(f"[!] {msg}", file=sys.stderr)
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="momento",
-        description="Momento Control CLI - Host runtime & process inspection client"
+        description="Momento Control CLI & Local Client - Host runtime & process inspection"
     )
     parser.add_argument(
         "--url",
@@ -231,6 +329,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
+
+    # setup
+    p_setup = subparsers.add_parser("setup", help="Run initial onboarding & permission setup wizard")
+    p_setup.add_argument("--force", action="store_true", help="Force rerun onboarding even if completed")
+    p_setup.add_argument("--non-interactive", action="store_true", help="Run onboarding without prompts")
+
+    # shell
+    subparsers.add_parser("shell", help="Start conversational interactive shell")
+
+    # scan
+    p_scan = subparsers.add_parser("scan", help="Scan and catalog local applications into registry")
+    p_scan.add_argument("--json", action="store_true", help="Output raw registry JSON")
+
+    # open
+    p_open = subparsers.add_parser("open", help="Resolve application and launch on VPS core")
+    p_open.add_argument("app_name", help="Name or alias of application (e.g. notepad, calc, chrome)")
+    p_open.add_argument("--args", nargs="*", default=None, help="Arguments to pass to application")
+
+    # run
+    p_run = subparsers.add_parser("run", help="Alias for open: resolve and run application")
+    p_run.add_argument("app_name", help="Name or alias of application")
+    p_run.add_argument("--args", nargs="*", default=None, help="Arguments to pass to application")
+
+    # ask
+    p_ask = subparsers.add_parser("ask", help="Send conversational command to Momento")
+    p_ask.add_argument("query", help="Conversational query (e.g. 'Momento, open notepad')")
 
     # launch
     p_launch = subparsers.add_parser("launch", help="Launch a binary inside an isolated sandbox session")
@@ -269,24 +393,34 @@ def preprocess_argv(argv: Optional[list]) -> Optional[list]:
     else:
         raw = list(argv)
 
-    if not raw or "launch" not in raw or "--args" not in raw:
+    if not raw:
         return raw
 
-    new_argv = []
-    i = 0
-    known_flags = {"--timeout", "--use-wine", "--no-wine", "--url", "--help", "-h"}
-    while i < len(raw):
-        if raw[i] == "--args":
-            i += 1
-            collected = []
-            while i < len(raw) and raw[i] not in known_flags:
-                collected.append(raw[i])
+    # If first argument is a conversational sentence like "Momento, open notepad" or "open calc"
+    if len(raw) == 1 and not raw[0].startswith("-"):
+        first = raw[0].strip().lower()
+        if any(first.startswith(p) for p in ("momento", "hey momento", "open ", "run ", "launch ", "start ", "stop ")):
+            return ["ask", raw[0]]
+
+    # If launch command is present with --args
+    if "launch" in raw and "--args" in raw:
+        new_argv = []
+        i = 0
+        known_flags = {"--timeout", "--use-wine", "--no-wine", "--url", "--help", "-h"}
+        while i < len(raw):
+            if raw[i] == "--args":
                 i += 1
-            new_argv.append(f"--args={' '.join(collected)}")
-        else:
-            new_argv.append(raw[i])
-            i += 1
-    return new_argv
+                collected = []
+                while i < len(raw) and raw[i] not in known_flags:
+                    collected.append(raw[i])
+                    i += 1
+                new_argv.append(f"--args={' '.join(collected)}")
+            else:
+                new_argv.append(raw[i])
+                i += 1
+        return new_argv
+
+    return raw
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -299,12 +433,27 @@ def main(argv: Optional[list] = None) -> int:
         return e.code if isinstance(e.code, int) else 0
 
     if not args.command:
-        parser.print_help()
-        return 0
+        # If running in non-interactive/automated environment without args, show help
+        if not sys.stdin.isatty():
+            parser.print_help()
+            return 0
+
+        # Interactive default: onboarding if needed, otherwise shell
+        if not is_setup_completed():
+            success = run_onboarding(backend_url=args.url)
+            return 0 if success else 1
+        else:
+            return start_interactive_shell(backend_url=args.url)
 
     api_url = args.url
 
     commands = {
+        "setup": cmd_setup,
+        "shell": cmd_shell,
+        "scan": cmd_scan,
+        "open": cmd_open_or_run,
+        "run": cmd_open_or_run,
+        "ask": cmd_ask,
         "launch": cmd_launch,
         "inspect": cmd_inspect,
         "sessions": cmd_sessions,

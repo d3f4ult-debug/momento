@@ -1,0 +1,13 @@
+{
+  "backend_url": "http://161.97.64.38:8000",
+  "setup_completed": false,
+  "permissions": {
+    "filesystem_indexing": false,
+    "app_discovery": false,
+    "execution_rights": false
+  },
+  "registry_path": "~/.momento/registry.json",
+  "last_scan_time": null,
+  "timeout_seconds": 300,
+  "version": "1.0.0"
+}
