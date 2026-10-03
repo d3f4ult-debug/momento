@@ -40,10 +40,11 @@ def check_prerequisites():
         print("Warning: pywebview not found. Desktop will fallback to system browser.")
 
 
-def build_executable(clean: bool = True):
-    """Run PyInstaller with Momento.spec."""
+def build_executable(clean: bool = True, target: str = "client"):
+    """Run PyInstaller with Momento-Client.spec or Momento.spec."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    spec_path = os.path.join(base_dir, "Momento.spec")
+    spec_filename = "Momento-Client.spec" if target == "client" else "Momento.spec"
+    spec_path = os.path.join(base_dir, spec_filename)
 
     if not os.path.exists(spec_path):
         print(f"Error: Specification file not found at {spec_path}")
@@ -53,7 +54,7 @@ def build_executable(clean: bool = True):
         clean_build_artifacts()
 
     print("\n=======================================================")
-    print("  Starting Momento Desktop Application Build")
+    print(f"  Starting Momento Desktop Application Build ({target.upper()})")
     print(f"  Target Spec: {spec_path}")
     print("=======================================================\n")
 
@@ -72,8 +73,10 @@ def build_executable(clean: bool = True):
         sys.exit(result.returncode)
 
     # Check executable output
-    output_dir = os.path.join(base_dir, "dist", "Momento")
-    exe_path = os.path.join(output_dir, "Momento.exe" if sys.platform == "win32" else "Momento")
+    dist_name = "Momento-Client" if target == "client" else "Momento"
+    output_dir = os.path.join(base_dir, "dist", dist_name)
+    exe_name = f"{dist_name}.exe" if sys.platform == "win32" else dist_name
+    exe_path = os.path.join(output_dir, exe_name)
 
     if os.path.exists(exe_path):
         size_mb = round(os.path.getsize(exe_path) / (1024 * 1024), 2)
@@ -85,7 +88,7 @@ def build_executable(clean: bool = True):
         print("=======================================================")
         print("\nTo launch Momento as a standalone native desktop app:")
         print(f"  Double-click: {exe_path}")
-        print(f"  Or run via terminal: .\\dist\\Momento\\Momento.exe\n")
+        print(f"  Or run via terminal: .\\dist\\{dist_name}\\{exe_name}\n")
         return exe_path
     else:
         print(f"\nWarning: Expected executable not found at {exe_path}")
@@ -94,11 +97,12 @@ def build_executable(clean: bool = True):
 
 def main():
     parser = argparse.ArgumentParser(description="Build Momento Standalone Desktop App")
+    parser.add_argument("--target", choices=["client", "server"], default="client", help="Target build (default: client)")
     parser.add_argument("--no-clean", action="store_true", help="Do not remove build/dist before building")
     args = parser.parse_args()
 
     check_prerequisites()
-    build_executable(clean=not args.no_clean)
+    build_executable(clean=not args.no_clean, target=args.target)
 
 
 if __name__ == "__main__":

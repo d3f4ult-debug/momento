@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Momento — Universal Desktop Workspace</title>
+  <style>
+    :root {
+      --bg-dark: #0a0f1d;
+      --bg-surface: #111827;
+      --bg-surface-hover: #1f2937;
+      --bg-card: #1e293b;
+      --border-color: #334155;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-glow: rgba(99, 102, 241, 0.25);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* Sidebar Layout */
+    .sidebar {
+      width: 320px;
+      background-color: var(--bg-surface);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .brand-header {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #a5b4fc, #6366f1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 9999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    .mode-bar {
+      padding: 12px 16px;
+      background: rgba(15, 23, 42, 0.6);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .mode-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .mode-selector {
+      display: flex;
+      background: var(--bg-dark);
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .mode-btn {
+      flex: 1;
+      padding: 6px;
+      font-size: 0.75rem;
+      text-align: center;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .mode-btn.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+
+    .sidebar-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-color);
+      padding: 0 16px;
+      margin-top: 6px;
+    }
+
+    .tab-btn {
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn.active {
+      color: #fff;
+      border-bottom-color: var(--accent);
+    }
+
+    .badge-count {
+      background: var(--bg-card);
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 9999px;
+    }
+
+    .tab-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.82rem;
+      margin-bottom: 12px;
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+    }
+
+    .app-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 8px;
+      margin-bottom: 4px;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+
+    .app-item:hover {
+      background: var(--bg-surface-hover);
+    }
+
+    .app-info {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin-right: 8px;
+    }
+
+    .app-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .app-cat {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+
+    .app-launch-btn {
+      padding: 4px 10px;
+      font-size: 0.72rem;
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .app-launch-btn:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .session-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+
+    .session-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .session-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .session-status {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .session-status.running {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--success);
+    }
+
+    .session-status.terminated, .session-status.exited {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+    }
+
+    .session-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .session-btn {
+      flex: 1;
+      padding: 4px 8px;
+      font-size: 0.72rem;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-surface);
+      color: var(--text-main);
+      cursor: pointer;
+    }
+
+    .session-btn.danger:hover {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #fff;
+    }
+
+    .sidebar-footer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      gap: 8px;
+    }
+
+    .footer-btn {
+      flex: 1;
+      padding: 8px;
+      font-size: 0.78rem;
+      background: var(--bg-surface-hover);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .footer-btn:hover {
+      background: var(--bg-card);
+    }
+
+    /* Main Chat Layout */
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background-color: var(--bg-dark);
+      position: relative;
+    }
+
+    .chat-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border-color);
+      background: var(--bg-surface);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .chat-title-group h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+
+    .chat-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .chat-stream {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message-row {
+      display: flex;
+      gap: 12px;
+      max-width: 85%;
+    }
+
+    .message-row.user {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 0.85rem;
+      flex-shrink: 0;
+    }
+
+    .avatar.momento {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      box-shadow: 0 2px 10px var(--accent-glow);
+    }
+
+    .avatar.user {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: #38bdf8;
+    }
+
+    .message-bubble {
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .message-row.user .message-bubble {
+      background: var(--accent);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+
+    .message-row.assistant .message-bubble {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      border-bottom-left-radius: 2px;
+    }
+
+    /* Live Output Card */
+    .execution-card {
+      margin-top: 10px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-weight: 600;
+      font-size: 0.88rem;
+    }
+
+    .card-pills {
+      display: flex;
+      gap: 6px;
+    }
+
+    .pill {
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-card);
+      color: var(--text-muted);
+      border: 1px solid var(--border-color);
+    }
+
+    .pill.green {
+      color: var(--success);
+      border-color: rgba(16, 185, 129, 0.4);
+    }
+
+    .log-terminal {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: "Cascadia Code", "Fira Code", monospace;
+      font-size: 0.75rem;
+      color: #38bdf8;
+      max-height: 140px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-top: 8px;
+    }
+
+    /* Chat Input */
+    .chat-input-bar {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border-color);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .suggestions-row {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .suggestion-chip {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .suggestion-chip:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .input-box-wrapper {
+      display: flex;
+      gap: 10px;
+    }
+
+    .chat-input {
+      flex: 1;
+      padding: 12px 16px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      color: var(--text-main);
+      font-size: 0.92rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .chat-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .send-btn {
+      padding: 0 20px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .send-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Modal Styling */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-card {
+      width: 480px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .modal-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .modal-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+      line-height: 1.4;
+    }
+
+    .perm-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 10px;
+      background: var(--bg-card);
+      border-radius: 8px;
+    }
+
+    .perm-check {
+      margin-top: 3px;
+      accent-color: var(--accent);
+    }
+
+    .perm-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .perm-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .modal-field {
+      margin-top: 14px;
+    }
+
+    .modal-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .modal-input {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.85rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .btn-primary {
+      padding: 9px 18px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn-secondary {
+      padding: 9px 18px;
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar: Discovered Apps, Live Sessions, Navigation -->
+  <aside class="sidebar">
+    <div class="brand-header">
+      <div class="brand-logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
+        <span>Momento</span>
+      </div>
+      <div class="status-badge" id="backendBadge">
+        <span class="status-dot"></span>
+        <span id="badgeText">Contabo VPS</span>
+      </div>
+    </div>
+
+    <!-- Execution Mode Selector -->
+    <div class="mode-bar">
+      <div class="mode-label">Execution Target</div>
+      <div class="mode-selector">
+        <button class="mode-btn active" id="modeHybrid" onclick="setMode('hybrid')">Hybrid Auto</button>
+        <button class="mode-btn" id="modeLocal" onclick="setMode('local')">Local Host</button>
+        <button class="mode-btn" id="modeVPS" onclick="setMode('vps')">VPS Sandbox</button>
+      </div>
+    </div>
+
+    <!-- Sidebar Tabs -->
+    <div class="sidebar-tabs">
+      <button class="tab-btn active" id="tabAppsBtn" onclick="switchTab('apps')">
+        Apps <span class="badge-count" id="appsCount">0</span>
+      </button>
+      <button class="tab-btn" id="tabSessionsBtn" onclick="switchTab('sessions')">
+        Active Sessions <span class="badge-count" id="sessionsCount">0</span>
+      </button>
+    </div>
+
+    <!-- Tab 1: Discovered Apps List -->
+    <div class="tab-content" id="appsTab">
+      <input type="text" class="search-input" id="appSearch" placeholder="Search installed apps..." oninput="filterApps()">
+      <div id="appsList">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Tab 2: Active Sessions List -->
+    <div class="tab-content hidden" id="sessionsTab">
+      <div id="sessionsList">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- Sidebar Footer -->
+    <div class="sidebar-footer">
+      <button class="footer-btn" onclick="rescanApps()">Rescan Apps</button>
+      <button class="footer-btn" onclick="openSettings()">Settings</button>
+    </div>
+  </aside>
+
+  <!-- Main Chat Dashboard Area -->
+  <main class="main-area">
+    <div class="chat-header">
+      <div class="chat-title-group">
+        <h2>Natural Language Execution Workspace</h2>
+        <div class="chat-subtitle" id="workspaceSubtitle">Autonomous process orchestration & isolated sandbox runtime</div>
+      </div>
+      <div>
+        <button class="footer-btn" style="padding: 6px 12px;" onclick="clearChat()">Clear Chat</button>
+      </div>
+    </div>
+
+    <!-- Message Stream -->
+    <div class="chat-stream" id="chatStream">
+      <!-- Welcome message -->
+      <div class="message-row assistant">
+        <div class="avatar momento">M</div>
+        <div class="message-bubble">
+          <strong>Welcome to Momento Desktop!</strong><br>
+          I can open and monitor any installed application on your Windows machine or run headlessly in your isolated Contabo VPS sandbox.<br><br>
+          Try typing in plain human language, or click any suggestion below.
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Input Bar -->
+    <div class="chat-input-bar">
+      <div class="suggestions-row">
+        <div class="suggestion-chip" onclick="quickPrompt('Momento, open Notepad')">Open Notepad</div>
+        <div class="suggestion-chip" onclick="quickPrompt('Momento, run Calculator')">Run Calculator</div>
+        <div class="suggestion-chip" onclick="quickPrompt('Momento, open Chrome')">Open Chrome</div>
+        <div class="suggestion-chip" onclick="quickPrompt('Show active sessions')">Show Sessions</div>
+        <div class="suggestion-chip" onclick="quickPrompt('Rescan applications')">Rescan Apps</div>
+      </div>
+      <div class="input-box-wrapper">
+        <input type="text" class="chat-input" id="chatInput" placeholder="Momento, can you open Notepad for me?" onkeydown="handleInputKey(event)">
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Setup & Permission Dialog Modal (First-Run) -->
+  <div class="modal-overlay hidden" id="setupModal">
+    <div class="modal-card">
+      <h3 class="modal-title">Welcome to Momento Desktop</h3>
+      <p class="modal-desc">
+        To launch, monitor, and coordinate your desktop applications, Momento requests local system permissions.
+      </p>
+
+      <div class="perm-item">
+        <input type="checkbox" class="perm-check" id="permFs" checked disabled>
+        <div>
+          <div class="perm-title">File System Indexing</div>
+          <div class="perm-desc">Scan common Windows app locations and PATH directories.</div>
+        </div>
+      </div>
+
+      <div class="perm-item">
+        <input type="checkbox" class="perm-check" id="permDiscovery" checked disabled>
+        <div>
+          <div class="perm-title">App Registry Discovery</div>
+          <div class="perm-desc">Catalog installed applications to resolve natural names.</div>
+        </div>
+      </div>
+
+      <div class="perm-item">
+        <input type="checkbox" class="perm-check" id="permExec" checked disabled>
+        <div>
+          <div class="perm-title">Execution Management</div>
+          <div class="perm-desc">Launch and monitor local processes and VPS sandbox tasks.</div>
+        </div>
+      </div>
+
+      <div class="modal-field">
+        <label class="modal-label">Contabo VPS Backend URL</label>
+        <input type="text" class="modal-input" id="setupBackendUrl" value="http://161.97.64.38:8000">
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-primary" id="btnGrantPerms" onclick="confirmOnboarding()">Grant Permissions &amp; Scan Apps</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay hidden" id="settingsModal">
+    <div class="modal-card">
+      <h3 class="modal-title">Momento Settings</h3>
+      <p class="modal-desc">Configure your remote VPS sandbox link and execution parameters.</p>
+
+      <div class="modal-field">
+        <label class="modal-label">Momento VPS API Endpoint</label>
+        <input type="text" class="modal-input" id="settingBackendUrl">
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
+        <button class="btn-primary" onclick="saveSettings()">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript Bridge Controller -->
+  <script>
+    let state = {
+      backend_url: "http://161.97.64.38:8000",
+      execution_mode: "hybrid",
+      apps: [],
+      sessions: []
+    };
+
+    // Helper to safely call Python bridge exposed via pywebview
+    async function callPython(methodName, ...args) {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api[methodName]) {
+        try {
+          return await window.pywebview.api[methodName](...args);
+        } catch (err) {
+          console.error(`Error calling Python bridge method ${methodName}:`, err);
+          return { success: false, error: String(err) };
+        }
+      } else {
+        console.warn(`pywebview.api.${methodName} not available (mock fallback)`);
+        return mockPythonCall(methodName, ...args);
+      }
+    }
+
+    // Mock bridge fallback for browser testing
+    async function mockPythonCall(methodName, ...args) {
+      if (methodName === "get_initial_state") {
+        return {
+          setup_completed: true,
+          backend_url: "http://161.97.64.38:8000",
+          execution_mode: "hybrid",
+          discovered_apps: [
+            { id: "notepad", name: "Notepad", category: "utility", binary_path: "C:\\Windows\\notepad.exe" },
+            { id: "calc", name: "Calculator", category: "utility", binary_path: "C:\\Windows\\calc.exe" },
+            { id: "chrome", name: "Google Chrome", category: "internet", binary_path: "C:\\Program Files\\Google\\Chrome\\chrome.exe" }
+          ],
+          total_apps: 3,
+          active_sessions: []
+        };
+      }
+      return { success: true };
+    }
+
+    // Initialize on page load
+    window.addEventListener("DOMContentLoaded", async () => {
+      // Allow pywebview to bind
+      setTimeout(initApp, 150);
+    });
+
+    async function initApp() {
+      const res = await callPython("get_initial_state");
+      if (res) {
+        state.backend_url = res.backend_url || state.backend_url;
+        state.execution_mode = res.execution_mode || "hybrid";
+        state.apps = res.discovered_apps || [];
+        state.sessions = res.active_sessions || [];
+
+        setMode(state.execution_mode, false);
+        renderApps(state.apps);
+        renderSessions(state.sessions);
+
+        // Check if onboarding is needed
+        if (!res.setup_completed) {
+          document.getElementById("setupBackendUrl").value = state.backend_url;
+          document.getElementById("setupModal").classList.remove("hidden");
+        }
+      }
+      // Start background session poller
+      setInterval(pollSessions, 3000);
+    }
+
+    // Onboarding Confirmation
+    async function confirmOnboarding() {
+      const btn = document.getElementById("btnGrantPerms");
+      btn.innerText = "Scanning Local Applications...";
+      btn.disabled = true;
+
+      const backendUrl = document.getElementById("setupBackendUrl").value;
+      const res = await callPython("grant_permissions", true, true, true, backendUrl);
+
+      btn.innerText = "Grant Permissions & Scan Apps";
+      btn.disabled = false;
+
+      if (res && res.success) {
+        document.getElementById("setupModal").classList.add("hidden");
+        state.apps = res.apps || [];
+        renderApps(state.apps);
+        appendAssistantMessage(`Setup complete! Discovered ${res.total_apps} applications on your laptop. You can now open apps naturally.`);
+      }
+    }
+
+    // Switch sidebar tab
+    function switchTab(tabName) {
+      document.getElementById("tabAppsBtn").classList.toggle("active", tabName === "apps");
+      document.getElementById("tabSessionsBtn").classList.toggle("active", tabName === "sessions");
+      document.getElementById("appsTab").classList.toggle("hidden", tabName !== "apps");
+      document.getElementById("sessionsTab").classList.toggle("hidden", tabName !== "sessions");
+    }
+
+    // Execution Mode
+    function setMode(mode, save = true) {
+      state.execution_mode = mode;
+      document.getElementById("modeHybrid").classList.toggle("active", mode === "hybrid");
+      document.getElementById("modeLocal").classList.toggle("active", mode === "local");
+      document.getElementById("modeVPS").classList.toggle("active", mode === "vps");
+
+      const badge = document.getElementById("badgeText");
+      if (mode === "local") badge.innerText = "Local Laptop";
+      else if (mode === "vps") badge.innerText = "Contabo VPS";
+      else badge.innerText = "Hybrid (Auto)";
+
+      if (save) {
+        callPython("save_settings", state.backend_url, mode);
+      }
+    }
+
+    // Render discovered apps list
+    function renderApps(apps) {
+      const container = document.getElementById("appsList");
+      document.getElementById("appsCount").innerText = apps.length;
+
+      if (!apps || apps.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:20px;">No applications indexed. Click Rescan Apps.</div>';
+        return;
+      }
+
+      container.innerHTML = apps.map(app => `
+        <div class="app-item" onclick="launchAppDirect('${escapeHtml(app.id)}')">
+          <div class="app-info">
+            <span class="app-name">${escapeHtml(app.name)}</span>
+            <span class="app-cat">${escapeHtml(app.category || "utility")} &bull; ${escapeHtml(app.id)}</span>
+          </div>
+          <button class="app-launch-btn">Launch</button>
+        </div>
+      `).join("");
+    }
+
+    // Filter apps in sidebar
+    function filterApps() {
+      const q = document.getElementById("appSearch").value.toLowerCase();
+      const filtered = state.apps.filter(a => 
+        a.name.toLowerCase().includes(q) || 
+        a.id.toLowerCase().includes(q) ||
+        (a.aliases && a.aliases.some(alias => alias.toLowerCase().includes(q)))
+      );
+      renderApps(filtered);
+    }
+
+    // Render Active Sessions
+    function renderSessions(sessions) {
+      const container = document.getElementById("sessionsList");
+      document.getElementById("sessionsCount").innerText = sessions.length;
+
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:20px;">No active sessions running.</div>';
+        return;
+      }
+
+      container.innerHTML = sessions.map(s => `
+        <div class="session-item">
+          <div class="session-header">
+            <span class="session-name">${escapeHtml(s.app_name || s.session_id)}</span>
+            <span class="session-status ${s.status}">${s.status}</span>
+          </div>
+          <div class="session-meta">
+            PID: ${s.pid || "N/A"} &bull; ${escapeHtml(s.runtime || "native")}
+          </div>
+          <div class="session-actions">
+            <button class="session-btn danger" onclick="stopSession('${s.session_id}')">Stop</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    // Rescan local apps
+    async function rescanApps() {
+      appendAssistantMessage("Scanning local environment for applications...");
+      const res = await callPython("rescan_apps");
+      if (res && res.success) {
+        state.apps = res.apps || [];
+        renderApps(state.apps);
+        appendAssistantMessage(`Scan complete! ${res.total_apps} applications are currently indexed.`);
+      }
+    }
+
+    // Poll live sessions periodically
+    async function pollSessions() {
+      const res = await callPython("get_initial_state");
+      if (res && res.active_sessions) {
+        state.sessions = res.active_sessions;
+        renderSessions(state.sessions);
+      }
+    }
+
+    // Stop process session
+    async function stopSession(sessionId) {
+      const res = await callPython("stop_session", sessionId);
+      if (res && res.success) {
+        appendAssistantMessage(`Session '${sessionId}' has been stopped.`);
+        pollSessions();
+      }
+    }
+
+    // Send Natural Language Message
+    async function sendMessage() {
+      const input = document.getElementById("chatInput");
+      const text = input.value.trim();
+      if (!text) return;
+
+      appendUserMessage(text);
+      input.value = "";
+
+      const sendBtn = document.getElementById("sendBtn");
+      sendBtn.innerText = "...";
+      sendBtn.disabled = true;
+
+      const res = await callPython("send_message", text, state.execution_mode);
+
+      sendBtn.innerText = "Send";
+      sendBtn.disabled = false;
+
+      if (res) {
+        if (res.action === "launch" && res.success) {
+          appendLaunchCard(res);
+          pollSessions();
+        } else {
+          appendAssistantMessage(res.message || "Command executed.");
+        }
+      }
+    }
+
+    function quickPrompt(text) {
+      document.getElementById("chatInput").value = text;
+      sendMessage();
+    }
+
+    function launchAppDirect(appId) {
+      quickPrompt(`Momento, open ${appId}`);
+    }
+
+    function handleInputKey(e) {
+      if (e.key === "Enter") {
+        sendMessage();
+      }
+    }
+
+    // Append Chat Bubbles
+    function appendUserMessage(text) {
+      const stream = document.getElementById("chatStream");
+      const row = document.createElement("div");
+      row.className = "message-row user";
+      row.innerHTML = `
+        <div class="avatar user">U</div>
+        <div class="message-bubble">${escapeHtml(text)}</div>
+      `;
+      stream.appendChild(row);
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    function appendAssistantMessage(text) {
+      const stream = document.getElementById("chatStream");
+      const row = document.createElement("div");
+      row.className = "message-row assistant";
+      row.innerHTML = `
+        <div class="avatar momento">M</div>
+        <div class="message-bubble">${escapeHtml(text).replace(/\n/g, '<br>')}</div>
+      `;
+      stream.appendChild(row);
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    function appendLaunchCard(data) {
+      const stream = document.getElementById("chatStream");
+      const row = document.createElement("div");
+      row.className = "message-row assistant";
+
+      const runtimeLabel = data.runtime === "local_native" ? "Local Host" : "Contabo VPS (Wine64)";
+
+      row.innerHTML = `
+        <div class="avatar momento">M</div>
+        <div class="message-bubble" style="width:100%;">
+          <strong>Launched ${escapeHtml(data.app_name)}</strong>
+          <div class="execution-card">
+            <div class="card-top">
+              <span class="card-title">${escapeHtml(data.binary_path)}</span>
+              <div class="card-pills">
+                <span class="pill green">${escapeHtml(data.status)}</span>
+                <span class="pill">PID: ${data.pid}</span>
+                <span class="pill">${runtimeLabel}</span>
+              </div>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px;">
+              Session ID: <code>${data.session_id}</code>
+            </div>
+            <div class="log-terminal" id="term_${data.session_id}">[Live Process Output Stream Initiated]</div>
+            <div style="margin-top:8px;display:flex;justify-content:flex-end;">
+              <button class="session-btn danger" style="max-width:120px;" onclick="stopSession('${data.session_id}')">Stop Process</button>
+            </div>
+          </div>
+        </div>
+      `;
+      stream.appendChild(row);
+      stream.scrollTop = stream.scrollHeight;
+
+      // Start live log streaming for this card
+      streamCardLogs(data.session_id);
+    }
+
+    // Stream live process output
+    function streamCardLogs(sessionId) {
+      let interval = setInterval(async () => {
+        const logBox = document.getElementById(`term_${sessionId}`);
+        if (!logBox) {
+          clearInterval(interval);
+          return;
+        }
+
+        const res = await callPython("get_session_logs", sessionId);
+        if (res && res.logs && res.logs.length > 0) {
+          logBox.innerText = res.logs.join("\n");
+          logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        if (res && (res.status === "terminated" || res.status === "exited")) {
+          logBox.innerText += `\n[Process ${res.status} (exit: ${res.exit_code})]`;
+          clearInterval(interval);
+        }
+      }, 1500);
+    }
+
+    function clearChat() {
+      document.getElementById("chatStream").innerHTML = `
+        <div class="message-row assistant">
+          <div class="avatar momento">M</div>
+          <div class="message-bubble">Chat history cleared. Ready for your next command.</div>
+        </div>
+      `;
+    }
+
+    // Settings Modal
+    function openSettings() {
+      document.getElementById("settingBackendUrl").value = state.backend_url;
+      document.getElementById("settingsModal").classList.remove("hidden");
+    }
+
+    function closeSettings() {
+      document.getElementById("settingsModal").classList.add("hidden");
+    }
+
+    async function saveSettings() {
+      const url = document.getElementById("settingBackendUrl").value;
+      await callPython("save_settings", url, state.execution_mode);
+      state.backend_url = url;
+      closeSettings();
+      appendAssistantMessage(`Configuration saved. Backend URL set to: ${url}`);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str).replace(/[&<>"']/g, function(m) {
+        return {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        }[m];
+      });
+    }
+  </script>
+</body>
+</html>
