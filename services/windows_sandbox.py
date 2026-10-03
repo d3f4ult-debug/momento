@@ -202,10 +202,13 @@ def launch_binary(
     args: Optional[List[str]] = None,
     env_vars: Optional[Dict[str, str]] = None,
     timeout: Optional[int] = 300,
-    working_dir: Optional[str] = None
+    working_dir: Optional[str] = None,
+    use_wine: Optional[bool] = None
 ) -> Dict[str, Any]:
     """
-    Launch a Windows binary headlessly inside an isolated sandbox session.
+    Launch a target application headlessly inside an isolated sandbox session.
+    If binary_path ends with .exe (case-insensitive) or use_wine is True,
+    execution is automatically routed through Wine/Proton inside the session's WINEPREFIX.
     
     Args:
         binary_path: Path to the target executable (.exe or script).
@@ -213,6 +216,7 @@ def launch_binary(
         env_vars: Optional custom environment variables.
         timeout: Maximum execution timeout in seconds (default: 300s).
         working_dir: Optional specific working directory.
+        use_wine: Explicit flag to force Wine/Proton compatibility wrapper.
     """
     ensure_sandbox_dirs()
 
@@ -229,15 +233,32 @@ def launch_binary(
     session_sandbox_dir = working_dir or os.path.join(SANDBOX_ROOT_DIR, "sessions", session_id)
     os.makedirs(session_sandbox_dir, exist_ok=True)
 
-    runtime = detect_runtime()
-    cmd: List[str] = []
+    is_exe = clean_path.lower().endswith(".exe")
+    # Automatic Wine/Proton routing: if .exe (case-insensitive) or if use_wine is True
+    if use_wine is True:
+        should_use_wine = True
+    elif use_wine is False:
+        should_use_wine = False
+    elif is_exe:
+        # On Linux/non-Windows hosts or when wine is detected, auto-route .exe to wine
+        should_use_wine = (sys.platform != "win32") or bool(shutil.which("wine") or shutil.which("wine64"))
+    else:
+        should_use_wine = (detect_runtime() == "wine")
 
-    # Configure headless environment
+    default_runtime = detect_runtime()
+    runtime = "wine" if should_use_wine else default_runtime
+
+    # Configure clean headless environment
     exec_env = os.environ.copy()
     exec_env["WINEDEBUG"] = "-all"
     exec_env["DISPLAY"] = ""
     exec_env["PYTHONUNBUFFERED"] = "1"
-    exec_env["WINEPREFIX"] = os.path.join(session_sandbox_dir, ".wine")
+
+    # Isolate Wine prefix and registry paths per session
+    wine_prefix = os.path.join(session_sandbox_dir, ".wine")
+    exec_env["WINEPREFIX"] = wine_prefix
+    exec_env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
+    exec_env["WINEARCH"] = "win64"
 
     if env_vars:
         exec_env.update(env_vars)
@@ -245,7 +266,7 @@ def launch_binary(
     arg_list = args or []
 
     if runtime == "wine":
-        wine_bin = shutil.which("wine64") or shutil.which("wine") or "wine"
+        wine_bin = shutil.which("wine64") or shutil.which("wine") or shutil.which("proton") or "wine"
         cmd = [wine_bin, clean_path] + arg_list
     else:
         cmd = [clean_path] + arg_list
@@ -353,12 +374,14 @@ async def sandbox_launch_endpoint(
     request: Request,
     binary_path: Optional[str] = Form(None),
     args: Optional[str] = Form(None),
-    timeout: Optional[int] = Form(300)
+    timeout: Optional[int] = Form(300),
+    use_wine: Optional[bool] = Form(None)
 ):
     """Launch target application headlessly in an isolated sandbox session."""
     eff_binary = binary_path
     eff_args = args
     eff_timeout = timeout
+    eff_use_wine = use_wine
 
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
@@ -366,6 +389,7 @@ async def sandbox_launch_endpoint(
             eff_binary = body.get("binary_path") or eff_binary
             eff_args = body.get("args") or eff_args
             eff_timeout = body.get("timeout", eff_timeout)
+            eff_use_wine = body.get("use_wine", eff_use_wine)
         except Exception:
             pass
 
@@ -386,7 +410,12 @@ async def sandbox_launch_endpoint(
             except Exception:
                 arg_list = eff_args.split()
 
-    res = launch_binary(binary_path=eff_binary, args=arg_list, timeout=eff_timeout)
+    res = launch_binary(
+        binary_path=eff_binary,
+        args=arg_list,
+        timeout=eff_timeout,
+        use_wine=eff_use_wine
+    )
     status_code = 200 if res.get("success") else 400
     return JSONResponse(status_code=status_code, content=res)
 

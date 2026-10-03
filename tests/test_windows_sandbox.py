@@ -239,3 +239,154 @@ def test_api_sandbox_error_cases():
     res6 = client.post("/api/sandbox/execute", json={"session_id": "sbx_nonexistent", "command": "echo hi"})
     assert res6.status_code == 400
     assert res6.json()["success"] is False
+
+
+def test_wine_routing_and_env_injection(monkeypatch, tmp_path):
+    """Verify that .exe binaries or use_wine=True auto-route to Wine with clean environment injection."""
+    from unittest.mock import MagicMock
+    import subprocess
+
+    # Create dummy .exe file
+    dummy_exe = tmp_path / "mock_app.exe"
+    dummy_exe.write_text("dummy binary content")
+
+    captured_cmds = []
+    captured_envs = []
+
+    def mock_popen(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        captured_envs.append(kwargs.get("env", {}))
+        mock_proc = MagicMock()
+        mock_proc.pid = 9999
+        mock_proc.poll.return_value = None
+        mock_proc.stdout = None
+        mock_proc.stderr = None
+        return mock_proc
+
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    # Ensure wine binary appears in path if not present
+    monkeypatch.setattr("shutil.which", lambda bin_name: f"/usr/bin/{bin_name}" if "wine" in bin_name or "proton" in bin_name else "/usr/bin/mock")
+
+    # 1. Launch with .exe on non-windows or default
+    monkeypatch.setattr("sys.platform", "linux")
+    res1 = launch_binary(str(dummy_exe), args=["--flag", "val"])
+    assert res1["success"] is True
+    assert res1["runtime"] == "wine"
+    assert "wine" in captured_cmds[0][0]
+    assert captured_cmds[0][1] == str(dummy_exe)
+    assert captured_cmds[0][2:] == ["--flag", "val"]
+
+    env1 = captured_envs[0]
+    assert env1["DISPLAY"] == ""
+    assert env1["WINEDEBUG"] == "-all"
+    assert env1["WINEARCH"] == "win64"
+    assert env1["WINEDLLOVERRIDES"] == "mscoree,mshtml="
+    assert env1["WINEPREFIX"].endswith(".wine")
+
+    # 2. Launch non-exe with use_wine=True
+    dummy_script = tmp_path / "run.sh"
+    dummy_script.write_text("echo hi")
+    res2 = launch_binary(str(dummy_script), use_wine=True)
+    assert res2["success"] is True
+    assert res2["runtime"] == "wine"
+    assert "wine" in captured_cmds[1][0]
+
+
+def test_momento_cli_commands(monkeypatch):
+    """Test Momento CLI command functions and parsing end-to-end."""
+    import momento_cli
+
+    # Test parser help
+    assert momento_cli.main(["--help"]) == 0
+
+    # Mock make_api_request to verify command handlers without network dependency
+    mock_responses = {
+        "/api/sandbox/launch": {
+            "success": True,
+            "session_id": "sbx_mock123",
+            "pid": 5555,
+            "runtime": "wine",
+            "status": "running",
+            "binary_path": "/app/test.exe"
+        },
+        "/api/sandbox/inspect": {
+            "success": True,
+            "session_id": "sbx_mock123",
+            "status": "running",
+            "pid": 5555,
+            "runtime": "wine",
+            "uptime_seconds": 15.5,
+            "metrics": {"cpu_percent": 1.2, "memory_mb": 42.0, "num_threads": 4},
+            "file_interactions": [{"file_name": "log.txt", "size_bytes": 100}],
+            "recent_stdout": ["Session started", "Processing"]
+        },
+        "/api/sandbox/sessions": {
+            "success": True,
+            "total_sessions_count": 1,
+            "sessions": [{
+                "session_id": "sbx_mock123",
+                "pid": 5555,
+                "status": "running",
+                "runtime": "wine",
+                "binary_path": "/app/test.exe"
+            }]
+        },
+        "/api/sandbox/stop": {
+            "success": True,
+            "session_id": "sbx_mock123",
+            "status": "terminated"
+        },
+        "/api/sandbox/execute": {
+            "success": True,
+            "session_id": "sbx_mock123",
+            "exit_code": 0,
+            "output": "TEST_CLI_OUTPUT",
+            "latency_ms": 5.0
+        }
+    }
+
+    def fake_make_api_request(url, method="GET", data=None, timeout=15):
+        for path, resp in mock_responses.items():
+            if path in url:
+                return resp
+        return {"success": False, "error": "Endpoint not mocked"}
+
+    monkeypatch.setattr(momento_cli, "make_api_request", fake_make_api_request)
+
+    # 1. launch
+    rc_launch = momento_cli.main(["launch", "/app/test.exe", "--args", "--headless", "--use-wine"])
+    assert rc_launch == 0
+
+    # 2. inspect (human format & json format)
+    rc_inspect = momento_cli.main(["inspect", "sbx_mock123"])
+    assert rc_inspect == 0
+    rc_inspect_json = momento_cli.main(["inspect", "sbx_mock123", "--json"])
+    assert rc_inspect_json == 0
+
+    # 3. sessions
+    rc_sessions = momento_cli.main(["sessions"])
+    assert rc_sessions == 0
+    rc_sessions_json = momento_cli.main(["sessions", "--json"])
+    assert rc_sessions_json == 0
+
+    # 4. execute
+    rc_exec = momento_cli.main(["execute", "sbx_mock123", "echo hi"])
+    assert rc_exec == 0
+
+    # 5. stop
+    rc_stop = momento_cli.main(["stop", "sbx_mock123", "--force"])
+    assert rc_stop == 0
+
+
+def test_bin_momento_delegates_to_cli():
+    """Verify bin/momento runs and outputs Momento CLI help without error."""
+    import subprocess
+    bin_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin", "momento"))
+    assert os.path.exists(bin_path)
+
+    proc = subprocess.run([sys.executable, bin_path, "--help"], capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert "Momento Control CLI" in proc.stdout
+    assert "launch" in proc.stdout
+    assert "sessions" in proc.stdout
+

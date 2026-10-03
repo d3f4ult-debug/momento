@@ -3265,7 +3265,8 @@ async def sandbox_launch_endpoint(
     request: Request,
     binary_path: Optional[str] = Form(None),
     args: Optional[str] = Form(None),
-    timeout: Optional[int] = Form(300)
+    timeout: Optional[int] = Form(300),
+    use_wine: Optional[bool] = Form(None)
 ):
     """
     Accepts an application path/payload, boots it headlessly inside an isolated
@@ -3274,6 +3275,7 @@ async def sandbox_launch_endpoint(
     eff_binary = binary_path
     eff_args = args
     eff_timeout = timeout
+    eff_use_wine = use_wine
 
     # Support JSON payload
     if request.headers.get("content-type", "").startswith("application/json"):
@@ -3282,6 +3284,7 @@ async def sandbox_launch_endpoint(
             eff_binary = body.get("binary_path") or eff_binary
             eff_args = body.get("args") or eff_args
             eff_timeout = body.get("timeout", eff_timeout)
+            eff_use_wine = body.get("use_wine", eff_use_wine)
         except Exception:
             pass
 
@@ -3302,7 +3305,12 @@ async def sandbox_launch_endpoint(
             except Exception:
                 arg_list = eff_args.split()
 
-    res = launch_binary(binary_path=eff_binary, args=arg_list, timeout=eff_timeout)
+    res = launch_binary(
+        binary_path=eff_binary,
+        args=arg_list,
+        timeout=eff_timeout,
+        use_wine=eff_use_wine
+    )
     status_code = 200 if res.get("success") else 400
     return JSONResponse(status_code=status_code, content=res)
 
