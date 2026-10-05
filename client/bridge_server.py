@@ -73,8 +73,7 @@ async def chat_message_endpoint(payload: Dict[str, Any] = Body(...)):
 
     try:
         res = _bridge_instance.send_message(message=message, execution_mode=mode)
-        status_code = 200 if res.get("success", False) else 400
-        return JSONResponse(status_code=status_code, content=res)
+        return JSONResponse(status_code=200, content=res)
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 

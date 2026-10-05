@@ -184,3 +184,49 @@ def test_desktop_client_headless_check():
     import desktop_client
     ret = desktop_client.main() if False else 0
     assert ret == 0
+
+
+def test_desktop_bridge_local_launch_notepad_and_calculator(temp_bridge, monkeypatch):
+    """Test typing commands like 'Momento, open notepad' or 'Run Calculator' in local & hybrid modes."""
+    # Grant permissions first
+    temp_bridge.grant_permissions(filesystem=True, discovery=True, execution=True)
+
+    # 1. Momento, open notepad
+    res_notepad = temp_bridge.send_message("Momento, open notepad", execution_mode="local")
+    assert res_notepad["success"] is True
+    assert res_notepad["action"] == "launch"
+    assert res_notepad["app_name"].lower() == "notepad"
+    assert res_notepad["session_id"].startswith("sbx_local_")
+    assert res_notepad["pid"] > 0
+    assert res_notepad["runtime"] == "local_native"
+    assert "logs" in res_notepad
+    # Cleanup session
+    temp_bridge.stop_session(res_notepad["session_id"])
+
+    # 2. Run Calculator (hybrid mode)
+    res_calc = temp_bridge.send_message("Run Calculator", execution_mode="hybrid")
+    assert res_calc["success"] is True
+    assert res_calc["action"] == "launch"
+    assert "calc" in res_calc["app_name"].lower()
+    assert res_calc["session_id"].startswith("sbx_local_")
+    assert res_calc["pid"] > 0
+    assert res_calc["runtime"] == "local_native"
+    assert "logs" in res_calc
+    temp_bridge.stop_session(res_calc["session_id"])
+
+
+def test_momento_cli_chat_command(capsys):
+    """Test momento_cli chat subcommand with JSON output for local execution."""
+    import momento_cli
+    code = momento_cli.main(["chat", "Momento, open notepad", "--mode", "local", "--json"])
+    assert code == 0
+    captured = capsys.readouterr()
+    import json
+    data = json.loads(captured.out.strip())
+    assert data["success"] is True
+    assert data["action"] == "launch"
+    assert data["session_id"].startswith("sbx_local_")
+    assert data["pid"] > 0
+    from client.execution_engine import global_execution_engine
+    global_execution_engine.stop_session(data["session_id"], force=True)
+

@@ -284,12 +284,13 @@ def cmd_scan(args: argparse.Namespace, api_url: str) -> int:
 
 
 def cmd_open_or_run(args: argparse.Namespace, api_url: str) -> int:
-    """Resolve application from local registry and launch on VPS execution core."""
+    """Resolve application from local registry and launch via hybrid/local execution."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
     app_query = args.app_name
     if getattr(args, "args", None):
         app_query += f" with args {' '.join(args.args)}"
-    router = NLPRouter(backend_url=api_url)
-    res = router.execute(f"open {app_query}")
+    res = bridge.send_message(f"open {app_query}", execution_mode="hybrid")
     msg = res.get("message", "")
     if res.get("success"):
         if msg:
@@ -303,8 +304,33 @@ def cmd_open_or_run(args: argparse.Namespace, api_url: str) -> int:
 
 def cmd_ask(args: argparse.Namespace, api_url: str) -> int:
     """Process natural language conversational command."""
-    router = NLPRouter(backend_url=api_url)
-    res = router.execute(args.query)
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    mode = getattr(args, "mode", "hybrid") or "hybrid"
+    res = bridge.send_message(args.query, execution_mode=mode)
+    if getattr(args, "json", False):
+        print(json.dumps(res))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if res.get("success"):
+        if msg:
+            print(msg)
+        return 0
+    else:
+        if msg:
+            print(f"[!] {msg}", file=sys.stderr)
+        return 1
+
+
+def cmd_chat(args: argparse.Namespace, api_url: str) -> int:
+    """Process natural language conversational command using DesktopAppBridge."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    mode = getattr(args, "mode", "hybrid") or "hybrid"
+    res = bridge.send_message(args.query, execution_mode=mode)
+    if getattr(args, "json", False):
+        print(json.dumps(res))
+        return 0 if res.get("success") else 1
     msg = res.get("message", "")
     if res.get("success"):
         if msg:
@@ -355,6 +381,14 @@ def build_parser() -> argparse.ArgumentParser:
     # ask
     p_ask = subparsers.add_parser("ask", help="Send conversational command to Momento")
     p_ask.add_argument("query", help="Conversational query (e.g. 'Momento, open notepad')")
+    p_ask.add_argument("--mode", default="hybrid", choices=["hybrid", "local", "vps"], help="Execution mode (default: hybrid)")
+    p_ask.add_argument("--json", action="store_true", help="Output raw JSON response")
+
+    # chat
+    p_chat = subparsers.add_parser("chat", help="Send conversational command via desktop bridge (local/hybrid/vps)")
+    p_chat.add_argument("query", help="Conversational query (e.g. 'Momento, open notepad')")
+    p_chat.add_argument("--mode", default="hybrid", choices=["hybrid", "local", "vps"], help="Execution mode (default: hybrid)")
+    p_chat.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # launch
     p_launch = subparsers.add_parser("launch", help="Launch a binary inside an isolated sandbox session")
@@ -454,6 +488,7 @@ def main(argv: Optional[list] = None) -> int:
         "open": cmd_open_or_run,
         "run": cmd_open_or_run,
         "ask": cmd_ask,
+        "chat": cmd_chat,
         "launch": cmd_launch,
         "inspect": cmd_inspect,
         "sessions": cmd_sessions,

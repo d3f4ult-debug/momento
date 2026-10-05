@@ -62,6 +62,7 @@ class LocalSession:
         self.check_status()
         with self._lock:
             recent_logs = list(self.logs[-20:])
+            all_logs = list(self.logs)
         return {
             "session_id": self.session_id,
             "app_name": self.app_name,
@@ -71,6 +72,7 @@ class LocalSession:
             "exit_code": self.exit_code,
             "created_at": self.created_at,
             "recent_logs": recent_logs,
+            "logs": all_logs,
             "runtime": "local_native"
         }
 
@@ -93,17 +95,25 @@ class ExecutionEngine:
         Captures output asynchronously in real-time.
         """
         arg_list = args or []
-        cmd = [binary_path] + arg_list
+        target_path = binary_path
+        if not os.path.isabs(target_path):
+            which_path = shutil.which(target_path)
+            if which_path:
+                target_path = which_path
+
+        cmd = [target_path] + arg_list
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         session_id = f"sbx_local_{uuid.uuid4().hex[:10]}"
-        display_name = app_name or os.path.basename(binary_path)
+        display_name = app_name or os.path.basename(target_path)
 
         try:
             # On Windows, hide command window for GUI apps if not in console mode
             creationflags = 0
+            shell = False
             if sys.platform == "win32":
-                # DETACHED_PROCESS or CREATE_NO_WINDOW if needed, but standard stdout capture works with pipes
-                pass
+                # If target is a shell command or not directly an executable file, enable shell
+                if not os.path.isabs(target_path) and not shutil.which(target_path):
+                    shell = True
 
             proc = subprocess.Popen(
                 cmd,
@@ -111,13 +121,14 @@ class ExecutionEngine:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                creationflags=creationflags
+                creationflags=creationflags,
+                shell=shell
             )
 
             session = LocalSession(
                 session_id=session_id,
                 app_name=display_name,
-                binary_path=binary_path,
+                binary_path=target_path,
                 process=proc,
                 created_at=now
             )
@@ -140,9 +151,10 @@ class ExecutionEngine:
                 "pid": proc.pid,
                 "status": "running",
                 "app_name": display_name,
-                "binary_path": binary_path,
+                "binary_path": target_path,
                 "runtime": "local_native",
-                "created_at": now
+                "created_at": now,
+                "logs": list(session.logs)
             }
 
         except Exception as e:

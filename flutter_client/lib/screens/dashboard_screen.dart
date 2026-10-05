@@ -199,20 +199,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final isSuccess = res['success'] == true;
 
         if (action == 'launch' && isSuccess) {
+          final rawLogs = res['logs'];
+          final initialLogs = rawLogs is List
+              ? rawLogs.map((e) => e.toString()).toList()
+              : <String>[];
+          final rawPid = res['pid'];
+          final pid = rawPid is int ? rawPid : int.tryParse(rawPid?.toString() ?? '0') ?? 0;
+
           final execResult = ExecutionResult(
             success: true,
-            sessionId: res['session_id'] ?? '',
-            appName: res['app_name'] ?? 'Application',
-            binaryPath: res['binary_path'] ?? '',
-            pid: res['pid'] is int ? res['pid'] : int.tryParse(res['pid']?.toString() ?? '0') ?? 0,
-            runtime: res['runtime'] ?? 'local_native',
-            status: res['status'] ?? 'running',
-            logs: [],
+            sessionId: res['session_id']?.toString() ?? '',
+            appName: res['app_name']?.toString() ?? 'Application',
+            binaryPath: res['binary_path']?.toString() ?? '',
+            pid: pid,
+            runtime: res['runtime']?.toString() ?? 'local_native',
+            status: res['status']?.toString() ?? 'running',
+            logs: initialLogs,
           );
           _addMomentoMessage('Launched ${execResult.appName} successfully.', result: execResult);
           _pollActiveSessions();
         } else {
-          final replyText = res['message']?.toString() ?? 'Command processed.';
+          final replyText = res['message']?.toString() ??
+              res['error']?.toString() ??
+              (isSuccess ? 'Command completed.' : 'Execution failed.');
           _addMomentoMessage(replyText);
         }
       }

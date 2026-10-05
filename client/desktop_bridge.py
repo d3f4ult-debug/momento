@@ -8,7 +8,9 @@ hybrid execution routing, and real-time process monitoring.
 
 import json
 import os
+import shutil
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 from client.config import (
@@ -150,31 +152,46 @@ class DesktopAppBridge:
                 binary_path = app_record["binary_path"]
                 app_name = app_record["name"]
             else:
-                binary_path = target
-                app_name = target
+                which_bin = shutil.which(target)
+                if which_bin:
+                    binary_path = which_bin
+                    app_name = os.path.splitext(os.path.basename(which_bin))[0].title()
+                else:
+                    binary_path = target
+                    app_name = target
 
             # Determine routing: local vs vps vs hybrid
-            effective_mode = execution_mode.lower()
+            eff_mode = (execution_mode or "hybrid").lower().strip()
             should_run_locally = False
 
-            if effective_mode == "local":
+            if eff_mode in ("local", "local host", "local_host", "localhost"):
                 should_run_locally = True
-            elif effective_mode == "vps":
+            elif eff_mode in ("vps", "vps sandbox", "vps_sandbox"):
                 should_run_locally = False
-            else:  # hybrid
-                # Run locally if binary exists on host, else fallback to VPS
-                should_run_locally = os.path.exists(binary_path) or bool(app_record)
+            else:  # hybrid / hybrid auto
+                # Run locally if binary exists on host, in app registry, or on PATH
+                should_run_locally = (
+                    os.path.exists(binary_path)
+                    or bool(app_record)
+                    or bool(shutil.which(binary_path))
+                    or bool(shutil.which(target))
+                )
 
             if should_run_locally:
                 local_res = self.execution_engine.launch(binary_path, args=args, app_name=app_name)
                 if local_res.get("success"):
                     session_id = local_res["session_id"]
                     pid = local_res["pid"]
+                    status = local_res.get("status", "running")
+                    logs = local_res.get("logs", [])
+                    if not logs:
+                        time.sleep(0.05)
+                        logs = self.execution_engine.get_logs(session_id).get("logs", [])
                     msg = (
                         f"Momento: Launched '{app_name}' natively on local Windows host.\n"
                         f"  [+] Session ID: {session_id}\n"
                         f"  [+] Local PID:  {pid}\n"
-                        f"  [+] Status:     running"
+                        f"  [+] Status:     {status}"
                     )
                     return {
                         "success": True,
@@ -184,15 +201,29 @@ class DesktopAppBridge:
                         "session_id": session_id,
                         "pid": pid,
                         "runtime": "local_native",
-                        "status": "running",
-                        "message": msg
+                        "status": status,
+                        "message": msg,
+                        "logs": logs
                     }
-                else:
-                    # Fallback to VPS if local launch failed
-                    pass
+                elif eff_mode in ("local", "local host", "local_host", "localhost"):
+                    err = local_res.get("error", "Execution failed")
+                    return {
+                        "success": False,
+                        "action": "launch",
+                        "app_name": app_name,
+                        "binary_path": binary_path,
+                        "session_id": None,
+                        "pid": None,
+                        "runtime": "local_native",
+                        "status": "failed",
+                        "message": f"Momento: Failed to launch '{app_name}' locally: {err}",
+                        "logs": []
+                    }
 
             # Remote VPS routing / fallback
             vps_res = self.nlp_router.execute(clean_text)
+            if vps_res.get("success") and "logs" not in vps_res:
+                vps_res["logs"] = []
             return vps_res
 
         return {"success": False, "message": f"Could not interpret: '{clean_text}'."}
