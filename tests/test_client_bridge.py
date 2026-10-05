@@ -106,3 +106,21 @@ def test_client_chat_empty_message():
     res = http_client.post("/api/client/chat", json={"message": "   "})
     assert res.status_code == 400
     assert "empty" in res.json()["message"].lower()
+
+
+def test_client_register_app_endpoint():
+    """Verify POST /api/client/apps/register adds custom app and returns success."""
+    import sys
+    payload = {
+        "name": "CustomApiTool",
+        "binary_path": sys.executable,
+        "aliases": ["apitool"],
+        "category": "development"
+    }
+    res = http_client.post("/api/client/apps/register", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["app"]["name"] == "CustomApiTool"
+    assert data["app"]["source"] == "manual_registration"
+

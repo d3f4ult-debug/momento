@@ -97,6 +97,30 @@ class DesktopAppBridge:
             "apps": apps_list
         }
 
+    def register_app(
+        self,
+        name: str,
+        binary_path: str,
+        aliases: Optional[List[str]] = None,
+        category: str = "custom"
+    ) -> Dict[str, Any]:
+        """Manually register a custom application into local registry."""
+        from client.scanner import register_custom_app
+        record = register_custom_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
+        msg = (
+            f"Momento: Registered custom application '{record['name']}' successfully.\n"
+            f"  [+] App ID:      {record['id']}\n"
+            f"  [+] Binary Path: {record['binary_path']}\n"
+            f"  [+] Aliases:     {', '.join(record['aliases'])}\n"
+            f"You can now launch it by typing 'Momento, open {record['name']}'."
+        )
+        return {
+            "success": True,
+            "action": "register",
+            "app": record,
+            "message": msg
+        }
+
     def send_message(self, message: str, execution_mode: str = "hybrid") -> Dict[str, Any]:
         """
         Parse human natural language message and dispatch to local or VPS execution.
@@ -113,6 +137,72 @@ class DesktopAppBridge:
             return {"success": False, "message": "Empty message."}
 
         action, target, args = self.nlp_router.parse_command(clean_text)
+
+        # Handle custom app registration
+        if action == "register" and target and args:
+            return self.register_app(name=target, binary_path=args[0])
+
+        # Handle compound GUI interaction (launch + automation)
+        if action == "interact" and target and args:
+            app_record = resolve_app_binary(target)
+            if app_record:
+                binary_path = app_record["binary_path"]
+                app_name = app_record["name"]
+            else:
+                which_bin = shutil.which(target)
+                if which_bin:
+                    binary_path = which_bin
+                    app_name = os.path.splitext(os.path.basename(which_bin))[0].title()
+                else:
+                    binary_path = target
+                    app_name = target
+
+            eff_mode = (execution_mode or "hybrid").lower().strip()
+            if eff_mode in ("vps", "vps sandbox", "vps_sandbox"):
+                return self.nlp_router.execute(clean_text)
+
+            local_res = self.execution_engine.launch_and_interact(
+                binary_path=binary_path,
+                steps=args,
+                app_name=app_name
+            )
+            if local_res.get("success"):
+                session_id = local_res["session_id"]
+                pid = local_res["pid"]
+                status = local_res.get("status", "running")
+                logs = local_res.get("logs", [])
+                msg = (
+                    f"Momento: Launched '{app_name}' natively on local Windows host and started automated interaction.\n"
+                    f"  [+] Session ID: {session_id}\n"
+                    f"  [+] Local PID:  {pid}\n"
+                    f"  [+] Status:     {status}\n"
+                    f"  [+] Actions:    Executing {len(args)} interaction step(s)..."
+                )
+                return {
+                    "success": True,
+                    "action": "launch",
+                    "app_name": app_name,
+                    "binary_path": binary_path,
+                    "session_id": session_id,
+                    "pid": pid,
+                    "runtime": "local_native",
+                    "status": status,
+                    "message": msg,
+                    "logs": logs
+                }
+            else:
+                return {
+                    "success": False,
+                    "action": "launch",
+                    "app_name": app_name,
+                    "binary_path": binary_path,
+                    "session_id": None,
+                    "pid": None,
+                    "runtime": "local_native",
+                    "status": "failed",
+                    "message": f"Momento: Failed to launch '{app_name}' for interaction: {local_res.get('error')}",
+                    "logs": []
+                }
 
         # 1. Handle non-launch commands
         if action in ("sessions", "stop", "inspect", "scan", "help"):

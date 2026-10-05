@@ -101,6 +101,23 @@ class NLPRouter:
         if m_inspect:
             return ("inspect", m_inspect.group(1).strip(), None)
 
+        # Register / Teach custom application command
+        m_reg = re.match(r"^(?:register|teach|add)\s+(?:app\s+)?(.+?)\s+(?:at|path|from)\s+(.+)$", clean, flags=re.IGNORECASE)
+        if m_reg:
+            app_name = m_reg.group(1).strip()
+            app_path = m_reg.group(2).strip().strip('"\'')
+            return ("register", app_name, [app_path])
+
+        # Compound desktop GUI automation command (e.g. "open notepad and type Hello World")
+        try:
+            from client.gui_automation import parse_compound_instruction
+            compound = parse_compound_instruction(clean)
+            if compound:
+                target_app, steps = compound
+                return ("interact", target_app, steps)
+        except Exception:
+            pass
+
         # Open / Run / Launch command
         m_launch = re.match(r"^(?:open|run|launch|start|execute)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m_launch:
@@ -130,11 +147,30 @@ class NLPRouter:
                     "Momento Conversational Commands:\n"
                     "  - Momento, open <app_name>   (e.g., Momento, open notepad)\n"
                     "  - Momento, run <app_name>    (e.g., Momento, run calc)\n"
+                    "  - open <app> and type <text> (e.g., open notepad and type Hello)\n"
+                    "  - register app <name> at <path> (e.g., register app MyApp at C:\\path\\app.exe)\n"
                     "  - sessions                   (list active sandbox sessions)\n"
                     "  - inspect <session_id>       (view telemetry & metrics)\n"
                     "  - stop <session_id>          (terminate sandbox session)\n"
                     "  - scan                       (rescan local applications)"
                 )
+            }
+
+        if action == "register" and target and args:
+            from client.scanner import register_custom_app
+            rec = register_custom_app(name=target, binary_path=args[0])
+            msg = (
+                f"Momento: Registered custom application '{rec['name']}' successfully.\n"
+                f"  [+] App ID:      {rec['id']}\n"
+                f"  [+] Binary Path: {rec['binary_path']}\n"
+                f"  [+] Aliases:     {', '.join(rec['aliases'])}\n"
+                f"You can now launch it anytime by saying 'Momento, open {rec['name']}'."
+            )
+            return {
+                "success": True,
+                "action": "register",
+                "app": rec,
+                "message": msg
             }
 
         if action == "sessions":

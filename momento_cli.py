@@ -339,6 +339,27 @@ def cmd_chat(args: argparse.Namespace, api_url: str) -> int:
     else:
         if msg:
             print(f"[!] {msg}", file=sys.stderr)
+def cmd_register(args: argparse.Namespace, api_url: str) -> int:
+    """Manually register a custom application into the local registry."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    res = bridge.register_app(
+        name=args.name,
+        binary_path=args.binary_path,
+        aliases=args.aliases,
+        category=getattr(args, "category", "custom")
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(res))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if res.get("success"):
+        if msg:
+            print(msg)
+        return 0
+    else:
+        if msg:
+            print(f"[!] {msg}", file=sys.stderr)
         return 1
 
 
@@ -389,6 +410,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("query", help="Conversational query (e.g. 'Momento, open notepad')")
     p_chat.add_argument("--mode", default="hybrid", choices=["hybrid", "local", "vps"], help="Execution mode (default: hybrid)")
     p_chat.add_argument("--json", action="store_true", help="Output raw JSON response")
+
+    # register
+    p_reg = subparsers.add_parser("register", help="Register a custom application into the local registry")
+    p_reg.add_argument("name", help="Display name of the application")
+    p_reg.add_argument("binary_path", help="Path to application binary/executable")
+    p_reg.add_argument("--aliases", nargs="*", default=None, help="Optional search aliases")
+    p_reg.add_argument("--category", default="custom", help="Application category (default: custom)")
+    p_reg.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # launch
     p_launch = subparsers.add_parser("launch", help="Launch a binary inside an isolated sandbox session")
@@ -489,6 +518,7 @@ def main(argv: Optional[list] = None) -> int:
         "run": cmd_open_or_run,
         "ask": cmd_ask,
         "chat": cmd_chat,
+        "register": cmd_register,
         "launch": cmd_launch,
         "inspect": cmd_inspect,
         "sessions": cmd_sessions,

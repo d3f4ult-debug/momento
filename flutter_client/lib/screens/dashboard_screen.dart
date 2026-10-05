@@ -7,6 +7,7 @@ import '../services/bridge_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/chat_message_bubble.dart';
 import '../widgets/onboarding_dialog.dart';
+import '../widgets/register_app_dialog.dart';
 import '../widgets/settings_dialog.dart';
 import '../widgets/sidebar.dart';
 
@@ -198,7 +199,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final action = res['action']?.toString() ?? '';
         final isSuccess = res['success'] == true;
 
-        if (action == 'launch' && isSuccess) {
+        if ((action == 'launch' || action == 'interact') && isSuccess) {
           final rawLogs = res['logs'];
           final initialLogs = rawLogs is List
               ? rawLogs.map((e) => e.toString()).toList()
@@ -216,8 +217,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             status: res['status']?.toString() ?? 'running',
             logs: initialLogs,
           );
-          _addMomentoMessage('Launched ${execResult.appName} successfully.', result: execResult);
+          final actionVerb = action == 'interact' ? 'Automating' : 'Launched';
+          _addMomentoMessage('$actionVerb ${execResult.appName} successfully.', result: execResult);
           _pollActiveSessions();
+        } else if (action == 'register' && isSuccess) {
+          final replyText = res['message']?.toString() ?? 'Application registered successfully.';
+          _addMomentoMessage(replyText);
+          final updatedApps = await widget.bridgeService.rescanApps();
+          if (mounted) {
+            setState(() => _apps = updatedApps);
+          }
         } else {
           final replyText = res['message']?.toString() ??
               res['error']?.toString() ??
@@ -274,6 +283,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _showRegisterAppDialog() async {
+    final registered = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return RegisterAppDialog(
+          onRegister: (name, binaryPath, aliases, category) async {
+            final res = await widget.bridgeService.registerApp(
+              name: name,
+              binaryPath: binaryPath,
+              aliases: aliases,
+              category: category,
+            );
+            return res['success'] == true;
+          },
+        );
+      },
+    );
+
+    if (registered == true && mounted) {
+      final updatedApps = await widget.bridgeService.rescanApps();
+      setState(() => _apps = updatedApps);
+      _addMomentoMessage('Custom application registered successfully and indexed into Momento!');
+    }
+  }
+
   void _clearChat() {
     setState(() {
       _messages.clear();
@@ -310,6 +344,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onStopSession: _handleStopSession,
             onRescan: _handleRescan,
             onOpenSettings: _showSettingsDialog,
+            onRegisterApp: _showRegisterAppDialog,
           ),
 
           // Right Main Area
@@ -394,6 +429,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Row(
                           children: [
                             _buildSuggestionChip('Open Notepad'),
+                            _buildSuggestionChip('Open notepad and type Hello Momento'),
                             _buildSuggestionChip('Run Calculator'),
                             _buildSuggestionChip('Open Chrome'),
                             _buildSuggestionChip('List active sessions'),

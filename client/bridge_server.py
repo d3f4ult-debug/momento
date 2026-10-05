@@ -63,6 +63,23 @@ async def rescan_apps_endpoint():
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
+@client_router.post("/apps/register")
+async def register_custom_app_endpoint(payload: Dict[str, Any] = Body(...)):
+    """Manually register a custom application into the local registry."""
+    name = payload.get("name", "").strip()
+    binary_path = payload.get("binary_path", "").strip()
+    aliases = payload.get("aliases")
+    category = payload.get("category", "custom")
+    if not name or not binary_path:
+        return JSONResponse(status_code=400, content={"success": False, "error": "Both 'name' and 'binary_path' are required."})
+
+    try:
+        res = _bridge_instance.register_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
+        return JSONResponse(status_code=200, content=res)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
 @client_router.post("/chat")
 async def chat_message_endpoint(payload: Dict[str, Any] = Body(...)):
     """Process natural language conversational command and execute via hybrid/local engine."""

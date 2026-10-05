@@ -16,6 +16,7 @@ class Sidebar extends StatefulWidget {
   final Function(String sessionId) onStopSession;
   final VoidCallback onRescan;
   final VoidCallback onOpenSettings;
+  final VoidCallback? onRegisterApp;
 
   const Sidebar({
     super.key,
@@ -28,6 +29,7 @@ class Sidebar extends StatefulWidget {
     required this.onStopSession,
     required this.onRescan,
     required this.onOpenSettings,
+    this.onRegisterApp,
   });
 
   @override
@@ -178,34 +180,55 @@ class _SidebarState extends State<Sidebar> {
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: Row(
+            child: Column(
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: widget.onRescan,
-                    icon: const Icon(Icons.refresh, size: 14),
-                    label: const Text('Rescan Apps', style: TextStyle(fontSize: 11)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.textMain,
-                      side: const BorderSide(color: AppTheme.borderColor),
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                if (widget.onRegisterApp != null) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: widget.onRegisterApp,
+                      icon: const Icon(Icons.add_circle_outline, size: 14, color: AppTheme.accent),
+                      label: const Text('+ Teach Custom App', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.accent)),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: AppTheme.accent.withValues(alpha: 0.08),
+                        side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.4)),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: widget.onOpenSettings,
-                    icon: const Icon(Icons.settings, size: 14),
-                    label: const Text('Settings', style: TextStyle(fontSize: 11)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.textMain,
-                      side: const BorderSide(color: AppTheme.borderColor),
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onRescan,
+                        icon: const Icon(Icons.refresh, size: 14),
+                        label: const Text('Rescan Apps', style: TextStyle(fontSize: 11)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.textMain,
+                          side: const BorderSide(color: AppTheme.borderColor),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onOpenSettings,
+                        icon: const Icon(Icons.settings, size: 14),
+                        label: const Text('Settings', style: TextStyle(fontSize: 11)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.textMain,
+                          side: const BorderSide(color: AppTheme.borderColor),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -295,24 +318,46 @@ class _SidebarState extends State<Sidebar> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-          child: TextField(
-            controller: _searchController,
-            onChanged: (val) => setState(() => _searchQuery = val),
-            style: const TextStyle(fontSize: 12),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: 'Search applications...',
-              prefixIcon: const Icon(Icons.search, size: 16, color: AppTheme.textMuted),
-              suffixIcon: _searchQuery.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear, size: 14),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() => _searchQuery = '');
-                      },
-                    )
-                  : null,
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (val) => setState(() => _searchQuery = val),
+                  style: const TextStyle(fontSize: 12),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Search applications...',
+                    prefixIcon: const Icon(Icons.search, size: 16, color: AppTheme.textMuted),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 14),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                          )
+                        : null,
+                  ),
+                ),
+              ),
+              if (widget.onRegisterApp != null) ...[
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: 'Teach / Register Custom App',
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppTheme.bgCard,
+                    padding: const EdgeInsets.all(8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      side: const BorderSide(color: AppTheme.borderColor),
+                    ),
+                  ),
+                  icon: const Icon(Icons.add, size: 16, color: AppTheme.accent),
+                  onPressed: widget.onRegisterApp,
+                ),
+              ],
+            ],
           ),
         ),
         Expanded(

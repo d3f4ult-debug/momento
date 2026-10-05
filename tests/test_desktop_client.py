@@ -230,3 +230,67 @@ def test_momento_cli_chat_command(capsys):
     from client.execution_engine import global_execution_engine
     global_execution_engine.stop_session(data["session_id"], force=True)
 
+
+def test_custom_app_registration_and_persistence(temp_bridge):
+    """Test manually registering custom app and ensuring it survives catalog rescans."""
+    # Register custom application
+    res = temp_bridge.register_app(
+        name="CustomPythonTool",
+        binary_path=sys.executable,
+        aliases=["pytool", "pycustom"],
+        category="development"
+    )
+    assert res["success"] is True
+    assert res["app"]["id"] == "custompythontool"
+    assert res["app"]["source"] == "manual_registration"
+
+    # Verify app is discoverable in catalog
+    from client.scanner import AppScanner
+    scanner = AppScanner()
+    catalog = scanner.get_registered_apps()
+    found = any(app["id"] == "custompythontool" for app in catalog)
+    assert found is True
+
+    # Rescan environment and verify custom app is preserved
+    rescanned_res = temp_bridge.rescan_apps()
+    assert rescanned_res["success"] is True
+    assert any(app["id"] == "custompythontool" for app in rescanned_res["apps"])
+
+
+def test_nlp_router_register_intent(temp_bridge):
+    """Test registering app via natural language in DesktopAppBridge."""
+    msg = f"Momento, register app MySpecialApp at {sys.executable}"
+    res = temp_bridge.send_message(msg)
+    assert res["success"] is True
+    assert res["action"] == "register"
+    assert res["app"]["id"] == "myspecialapp"
+    assert res["app"]["binary_path"] == sys.executable
+
+
+def test_gui_automation_parsing_and_execution(temp_engine):
+    """Test compound instruction parsing and launch_and_interact execution flow."""
+    from client.gui_automation import parse_compound_instruction
+
+    # 1. Test instruction parsing
+    prompt = "open notepad and type Hello world and press enter"
+    app_name, steps = parse_compound_instruction(prompt)
+    assert app_name == "notepad"
+    assert any(s["action"] == "type" and s["text"] == "Hello world" for s in steps)
+    assert any(s["action"] == "press" and s["key"] == "enter" for s in steps)
+
+    # 2. Test launch_and_interact with a mock harmless process (sys.executable)
+    res = temp_engine.launch_and_interact(
+        binary_path=sys.executable,
+        steps=[{"action": "wait", "seconds": 0.2}],
+        app_name="MockPython"
+    )
+    assert res["success"] is True
+    assert res["status"] in ("running", "completed")
+    assert res["pid"] > 0
+    time.sleep(0.5)
+
+    logs_res = temp_engine.get_logs(res["session_id"])
+    assert logs_res["success"] is True
+    assert any("Automation" in line or "Launched" in line or "Process initialized" in line for line in logs_res["logs"])
+    temp_engine.stop_session(res["session_id"], force=True)
+    time.sleep(0.5)

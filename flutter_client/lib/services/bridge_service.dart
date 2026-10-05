@@ -375,6 +375,63 @@ class BridgeService {
     }
   }
 
+  /// Manually register a custom application into the local registry
+  Future<Map<String, dynamic>> registerApp({
+    required String name,
+    required String binaryPath,
+    List<String>? aliases,
+    String? category,
+  }) async {
+    if (executionMode == AppConfig.modeLocal || executionMode == AppConfig.modeHybrid) {
+      await ensureDaemonRunning();
+    }
+
+    final urls = _getCandidateUrls();
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/apps/register'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({
+            'name': name.trim(),
+            'binary_path': binaryPath.trim(),
+            if (aliases != null && aliases.isNotEmpty) 'aliases': aliases,
+            'category': category ?? 'custom',
+          }),
+        ).timeout(const Duration(seconds: 10));
+
+        if (res.statusCode == 200 || res.statusCode == 400) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          return data;
+        }
+      } catch (_) {}
+    }
+
+    // CLI fallback for custom app registration
+    final py = await getPythonExecutable();
+    final root = findProjectRoot();
+    final cli = _getMomentoCliPath(root);
+    try {
+      final args = [cli, 'register', name.trim(), binaryPath.trim(), '--json'];
+      if (aliases != null && aliases.isNotEmpty) {
+        args.add('--aliases');
+        args.addAll(aliases);
+      }
+      final proc = await runPythonProcess(py, args);
+      final out = proc.stdout.toString().trim();
+      if (out.isNotEmpty) {
+        return jsonDecode(out) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('[BridgeService] CLI register fallback error: $e');
+    }
+
+    return {
+      'success': false,
+      'error': 'Failed to register application. Check if Python backend is available.',
+    };
+  }
+
   /// Send conversational command (e.g. "Momento, open notepad" or "Run Calculator")
   Future<Map<String, dynamic>> sendMessage(String message, {String? mode}) async {
     final effMode = mode ?? executionMode;

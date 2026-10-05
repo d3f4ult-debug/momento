@@ -164,6 +164,44 @@ class ExecutionEngine:
                 "session_id": None
             }
 
+    def launch_and_interact(
+        self,
+        binary_path: str,
+        steps: List[Dict[str, Any]],
+        args: Optional[List[str]] = None,
+        app_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Launch application process and execute automated GUI interaction steps asynchronously,
+        streaming logs in real-time into the session terminal card.
+        """
+        res = self.launch(binary_path, args=args, app_name=app_name)
+        if not res.get("success"):
+            return res
+
+        session_id = res["session_id"]
+        session = self.get_session(session_id)
+        if session:
+            session.append_log(f"[*] Process initialized (PID: {res['pid']}). Queued {len(steps)} GUI interaction step(s).")
+            auto_thread = threading.Thread(
+                target=self._run_automation_steps,
+                args=(session, steps),
+                daemon=True,
+                name=f"Automation-{session_id}"
+            )
+            auto_thread.start()
+            res["logs"] = list(session.logs)
+
+        return res
+
+    def _run_automation_steps(self, session: LocalSession, steps: List[Dict[str, Any]]) -> None:
+        """Run automation sequence in background thread and stream progress into session logs."""
+        try:
+            from client.gui_automation import execute_steps
+            execute_steps(steps, log_callback=session.append_log)
+        except Exception as e:
+            session.append_log(f"[!] GUI automation error: {e}")
+
     def _stream_output_reader(self, session: LocalSession) -> None:
         """Stream lines from process stdout into session logs buffer."""
         try:

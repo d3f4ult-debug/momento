@@ -9,6 +9,7 @@ import datetime
 import difflib
 import json
 import os
+import re
 import shutil
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -226,6 +227,20 @@ class AppScanner:
                             if app_info and app_info["id"] not in discovered:
                                 discovered[app_info["id"]] = app_info
 
+        # Preserve any previously registered custom apps
+        custom_apps: Dict[str, Dict[str, Any]] = {}
+        if os.path.exists(self.registry_file):
+            try:
+                with open(self.registry_file, "r", encoding="utf-8") as f:
+                    old_reg = json.load(f)
+                    for k, v in old_reg.get("apps", {}).items():
+                        if v.get("custom") is True or v.get("source") == "manual_registration":
+                            custom_apps[k] = v
+            except Exception:
+                pass
+
+        discovered.update(custom_apps)
+
         # Compile registry payload
         registry_payload = {
             "version": "1.0",
@@ -240,6 +255,58 @@ class AppScanner:
             json.dump(registry_payload, f, indent=2)
 
         return registry_payload
+
+    def register_custom_app(
+        self,
+        name: str,
+        binary_path: str,
+        aliases: Optional[List[str]] = None,
+        category: str = "custom"
+    ) -> Dict[str, Any]:
+        """Manually register a custom application into local registry."""
+        ensure_momento_dir()
+        clean_name = name.strip()
+        clean_path = binary_path.strip()
+
+        if not os.path.isabs(clean_path):
+            which_path = shutil.which(clean_path)
+            if which_path:
+                clean_path = which_path
+
+        clean_path = os.path.normpath(clean_path)
+        app_id = re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-")
+        if not app_id:
+            app_id = f"custom-app-{int(datetime.datetime.now().timestamp())}"
+
+        alias_set = {app_id, clean_name.lower()}
+        if aliases:
+            for a in aliases:
+                a_str = a.strip().lower()
+                if a_str:
+                    alias_set.add(a_str)
+
+        record = {
+            "id": app_id,
+            "name": clean_name,
+            "binary_path": clean_path,
+            "aliases": sorted(list(alias_set)),
+            "category": category or "custom",
+            "source": "manual_registration",
+            "custom": True,
+            "registered_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+
+        registry = self.load_registry()
+        apps = registry.get("apps", {})
+        apps[app_id] = record
+        registry["apps"] = apps
+        registry["total_apps"] = len(apps)
+        registry["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        with open(self.registry_file, "w", encoding="utf-8") as f:
+            json.dump(registry, f, indent=2)
+
+        return record
 
     def _parse_desktop_file(self, file_path: str) -> Optional[Dict[str, Any]]:
         """Parse Linux .desktop file to extract binary name and display name."""
@@ -277,6 +344,12 @@ class AppScanner:
             except Exception:
                 pass
         return self.scan_environment()
+
+    def get_registered_apps(self) -> List[Dict[str, Any]]:
+        """Return list of all registered applications in catalog."""
+        reg = self.load_registry()
+        return list(reg.get("apps", {}).values())
+
 
 
 def resolve_app_binary(query: str, registry_file: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -353,3 +426,15 @@ def resolve_app_binary(query: str, registry_file: Optional[str] = None) -> Optio
         }
 
     return None
+
+
+def register_custom_app(
+    name: str,
+    binary_path: str,
+    aliases: Optional[List[str]] = None,
+    category: str = "custom",
+    registry_file: Optional[str] = None
+) -> Dict[str, Any]:
+    """Register custom application using AppScanner."""
+    scanner = AppScanner(registry_file=registry_file)
+    return scanner.register_custom_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
