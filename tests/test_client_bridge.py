@@ -124,3 +124,26 @@ def test_client_register_app_endpoint():
     assert data["app"]["name"] == "CustomApiTool"
     assert data["app"]["source"] == "manual_registration"
 
+
+def test_client_register_app_with_working_dir_and_args(tmp_path):
+    """Verify POST /api/client/apps/register persists working_dir and args."""
+    import sys
+    custom_dir = str(tmp_path / "workdir")
+    data_file = str(tmp_path / "data.db")
+    payload = {
+        "name": "DatabaseTool",
+        "binary_path": sys.executable,
+        "working_dir": custom_dir,
+        "args": f"--db {data_file}",
+        "data_file_path": data_file,
+        "category": "development"
+    }
+    res = http_client.post("/api/client/apps/register", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["app"]["working_dir"] == custom_dir
+    assert data["app"]["default_args"] == ["--db", data_file]
+    assert data["app"]["data_file_path"] == data_file
+
+

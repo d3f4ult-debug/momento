@@ -294,3 +294,72 @@ def test_gui_automation_parsing_and_execution(temp_engine):
     assert any("Automation" in line or "Launched" in line or "Process initialized" in line for line in logs_res["logs"])
     temp_engine.stop_session(res["session_id"], force=True)
     time.sleep(0.5)
+
+
+def test_resolve_shortcut_or_target():
+    """Test resolve_shortcut_or_target helper on direct files and directories."""
+    from client.scanner import resolve_shortcut_or_target
+
+    # Direct executable
+    target, cwd, args = resolve_shortcut_or_target(sys.executable, working_dir=None, args=["--version"])
+    assert os.path.normcase(target) == os.path.normcase(sys.executable)
+    assert cwd == os.path.dirname(sys.executable)
+    assert args == ["--version"]
+
+    # Directory resolution
+    py_dir = os.path.dirname(sys.executable)
+    target_dir, cwd_dir, _ = resolve_shortcut_or_target(py_dir)
+    assert target_dir.lower().endswith(".exe")
+    assert cwd_dir == py_dir
+
+
+def test_execution_engine_working_dir_and_args(temp_engine, tmp_path):
+    """Test that ExecutionEngine respects custom working_dir and arguments."""
+    subfolder = tmp_path / "custom_workdir"
+    subfolder.mkdir()
+    flag_file = subfolder / "test_flag.txt"
+    flag_file.write_text("ACTIVE_DATA")
+
+    res = temp_engine.launch(
+        sys.executable,
+        args=["-c", "import os, sys; print('CWD:' + os.getcwd(), flush=True); print('FLAG:' + open('test_flag.txt').read().strip(), flush=True)"],
+        working_dir=str(subfolder),
+        app_name="DataApp"
+    )
+
+    assert res["success"] is True
+    assert res["working_dir"] == str(subfolder)
+    session_id = res["session_id"]
+
+    time.sleep(0.5)
+    logs_res = temp_engine.get_logs(session_id)
+    assert logs_res["success"] is True
+    combined_logs = " ".join(logs_res["logs"])
+    assert "CWD:" in combined_logs
+    assert "FLAG:ACTIVE_DATA" in combined_logs
+    temp_engine.stop_session(session_id, force=True)
+
+
+def test_custom_app_registration_with_data_files(temp_bridge, tmp_path):
+    """Test registering custom app with working directory, arguments, and data file."""
+    data_dir = tmp_path / "app_data"
+    data_dir.mkdir()
+    config_file = data_dir / "settings.cfg"
+    config_file.write_text("port=9000")
+
+    res = temp_bridge.register_app(
+        name="DataProcessor",
+        binary_path=sys.executable,
+        aliases=["dataproc"],
+        category="utility",
+        working_dir=str(data_dir),
+        args=f"--config {config_file}",
+        data_file_path=str(config_file)
+    )
+
+    assert res["success"] is True
+    app = res["app"]
+    assert app["working_dir"] == str(data_dir)
+    assert app["default_args"] == ["--config", str(config_file)]
+    assert app["data_file_path"] == str(config_file)
+

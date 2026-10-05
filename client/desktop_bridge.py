@@ -11,7 +11,7 @@ import os
 import shutil
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from client.config import (
     DEFAULT_BACKEND_URL,
@@ -102,15 +102,30 @@ class DesktopAppBridge:
         name: str,
         binary_path: str,
         aliases: Optional[List[str]] = None,
-        category: str = "custom"
+        category: str = "custom",
+        working_dir: Optional[str] = None,
+        args: Optional[Union[str, List[str]]] = None,
+        data_file_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Manually register a custom application into local registry."""
         from client.scanner import register_custom_app
-        record = register_custom_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
+        record = register_custom_app(
+            name=name,
+            binary_path=binary_path,
+            aliases=aliases,
+            category=category,
+            working_dir=working_dir,
+            args=args,
+            data_file_path=data_file_path,
+        )
+        cwd_info = f"\n  [+] Working Dir: {record.get('working_dir')}" if record.get('working_dir') else ""
+        args_info = f"\n  [+] Arguments:   {' '.join(record.get('default_args', []))}" if record.get('default_args') else ""
+        data_info = f"\n  [+] Data File:   {record.get('data_file_path')}" if record.get('data_file_path') else ""
         msg = (
             f"Momento: Registered custom application '{record['name']}' successfully.\n"
             f"  [+] App ID:      {record['id']}\n"
-            f"  [+] Binary Path: {record['binary_path']}\n"
+            f"  [+] Binary Path: {record['binary_path']}"
+            f"{cwd_info}{args_info}{data_info}\n"
             f"  [+] Aliases:     {', '.join(record['aliases'])}\n"
             f"You can now launch it by typing 'Momento, open {record['name']}'."
         )
@@ -145,9 +160,11 @@ class DesktopAppBridge:
         # Handle compound GUI interaction (launch + automation)
         if action == "interact" and target and args:
             app_record = resolve_app_binary(target)
+            app_working_dir = None
             if app_record:
                 binary_path = app_record["binary_path"]
                 app_name = app_record["name"]
+                app_working_dir = app_record.get("working_dir")
             else:
                 which_bin = shutil.which(target)
                 if which_bin:
@@ -164,7 +181,8 @@ class DesktopAppBridge:
             local_res = self.execution_engine.launch_and_interact(
                 binary_path=binary_path,
                 steps=args,
-                app_name=app_name
+                app_name=app_name,
+                working_dir=app_working_dir
             )
             if local_res.get("success"):
                 session_id = local_res["session_id"]
@@ -238,9 +256,13 @@ class DesktopAppBridge:
         # 2. Handle Launch action
         if action == "launch" and target:
             app_record = resolve_app_binary(target)
+            app_working_dir = None
+            default_args: List[str] = []
             if app_record:
                 binary_path = app_record["binary_path"]
                 app_name = app_record["name"]
+                app_working_dir = app_record.get("working_dir")
+                default_args = app_record.get("default_args") or []
             else:
                 which_bin = shutil.which(target)
                 if which_bin:
@@ -249,6 +271,8 @@ class DesktopAppBridge:
                 else:
                     binary_path = target
                     app_name = target
+
+            combined_args = list(default_args) + (list(args) if args else [])
 
             # Determine routing: local vs vps vs hybrid
             eff_mode = (execution_mode or "hybrid").lower().strip()
@@ -268,7 +292,12 @@ class DesktopAppBridge:
                 )
 
             if should_run_locally:
-                local_res = self.execution_engine.launch(binary_path, args=args, app_name=app_name)
+                local_res = self.execution_engine.launch(
+                    binary_path,
+                    args=combined_args,
+                    app_name=app_name,
+                    working_dir=app_working_dir
+                )
                 if local_res.get("success"):
                     session_id = local_res["session_id"]
                     pid = local_res["pid"]

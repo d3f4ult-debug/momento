@@ -23,7 +23,9 @@ class LocalSession:
         app_name: str,
         binary_path: str,
         process: subprocess.Popen,
-        created_at: str
+        created_at: str,
+        working_dir: Optional[str] = None,
+        args: Optional[List[str]] = None
     ):
         self.session_id = session_id
         self.app_name = app_name
@@ -32,6 +34,8 @@ class LocalSession:
         self.pid = process.pid
         self.status = "running"
         self.created_at = created_at
+        self.working_dir = working_dir
+        self.args = args or []
         self.exit_code: Optional[int] = None
         self.logs: List[str] = []
         self._lock = threading.Lock()
@@ -71,6 +75,8 @@ class LocalSession:
             "status": self.status,
             "exit_code": self.exit_code,
             "created_at": self.created_at,
+            "working_dir": self.working_dir,
+            "args": self.args,
             "recent_logs": recent_logs,
             "logs": all_logs,
             "runtime": "local_native"
@@ -88,18 +94,35 @@ class ExecutionEngine:
         self,
         binary_path: str,
         args: Optional[List[str]] = None,
-        app_name: Optional[str] = None
+        app_name: Optional[str] = None,
+        working_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Launch an application binary natively on the local Windows laptop.
+        Supports custom arguments, working directories, shortcut resolution, and directory targets.
         Captures output asynchronously in real-time.
         """
-        arg_list = args or []
-        target_path = binary_path
+        from client.scanner import resolve_shortcut_or_target
+
+        resolved_bin, resolved_cwd, resolved_args = resolve_shortcut_or_target(
+            binary_path, working_dir=working_dir, args=args
+        )
+
+        arg_list = (args if args is not None else resolved_args) or []
+        target_path = resolved_bin
+
         if not os.path.isabs(target_path):
             which_path = shutil.which(target_path)
             if which_path:
                 target_path = which_path
+
+        effective_cwd = working_dir or resolved_cwd
+        if effective_cwd and os.path.isdir(effective_cwd):
+            effective_cwd = os.path.normpath(os.path.abspath(effective_cwd))
+        elif os.path.isabs(target_path) and os.path.isfile(target_path):
+            effective_cwd = os.path.dirname(os.path.abspath(target_path))
+        else:
+            effective_cwd = None
 
         cmd = [target_path] + arg_list
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -107,11 +130,9 @@ class ExecutionEngine:
         display_name = app_name or os.path.basename(target_path)
 
         try:
-            # On Windows, hide command window for GUI apps if not in console mode
             creationflags = 0
             shell = False
             if sys.platform == "win32":
-                # If target is a shell command or not directly an executable file, enable shell
                 if not os.path.isabs(target_path) and not shutil.which(target_path):
                     shell = True
 
@@ -121,6 +142,7 @@ class ExecutionEngine:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                cwd=effective_cwd,
                 creationflags=creationflags,
                 shell=shell
             )
@@ -130,7 +152,9 @@ class ExecutionEngine:
                 app_name=display_name,
                 binary_path=target_path,
                 process=proc,
-                created_at=now
+                created_at=now,
+                working_dir=effective_cwd,
+                args=arg_list
             )
 
             with self._lock:
@@ -152,6 +176,8 @@ class ExecutionEngine:
                 "status": "running",
                 "app_name": display_name,
                 "binary_path": target_path,
+                "working_dir": effective_cwd,
+                "args": arg_list,
                 "runtime": "local_native",
                 "created_at": now,
                 "logs": list(session.logs)
@@ -169,13 +195,14 @@ class ExecutionEngine:
         binary_path: str,
         steps: List[Dict[str, Any]],
         args: Optional[List[str]] = None,
-        app_name: Optional[str] = None
+        app_name: Optional[str] = None,
+        working_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Launch application process and execute automated GUI interaction steps asynchronously,
         streaming logs in real-time into the session terminal card.
         """
-        res = self.launch(binary_path, args=args, app_name=app_name)
+        res = self.launch(binary_path, args=args, app_name=app_name, working_dir=working_dir)
         if not res.get("success"):
             return res
 

@@ -381,6 +381,9 @@ class BridgeService {
     required String binaryPath,
     List<String>? aliases,
     String? category,
+    String? workingDir,
+    String? arguments,
+    String? dataFilePath,
   }) async {
     if (executionMode == AppConfig.modeLocal || executionMode == AppConfig.modeHybrid) {
       await ensureDaemonRunning();
@@ -397,6 +400,9 @@ class BridgeService {
             'binary_path': binaryPath.trim(),
             if (aliases != null && aliases.isNotEmpty) 'aliases': aliases,
             'category': category ?? 'custom',
+            if (workingDir != null && workingDir.trim().isNotEmpty) 'working_dir': workingDir.trim(),
+            if (arguments != null && arguments.trim().isNotEmpty) 'args': arguments.trim(),
+            if (dataFilePath != null && dataFilePath.trim().isNotEmpty) 'data_file_path': dataFilePath.trim(),
           }),
         ).timeout(const Duration(seconds: 10));
 
@@ -416,6 +422,15 @@ class BridgeService {
       if (aliases != null && aliases.isNotEmpty) {
         args.add('--aliases');
         args.addAll(aliases);
+      }
+      if (workingDir != null && workingDir.trim().isNotEmpty) {
+        args.addAll(['--working-dir', workingDir.trim()]);
+      }
+      if (arguments != null && arguments.trim().isNotEmpty) {
+        args.addAll(['--args', arguments.trim()]);
+      }
+      if (dataFilePath != null && dataFilePath.trim().isNotEmpty) {
+        args.addAll(['--data-file', dataFilePath.trim()]);
       }
       final proc = await runPythonProcess(py, args);
       final out = proc.stdout.toString().trim();

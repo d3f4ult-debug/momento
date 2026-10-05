@@ -7,6 +7,8 @@ class RegisterAppDialog extends StatefulWidget {
     String binaryPath,
     List<String> aliases,
     String category,
+    String? workingDir,
+    String? arguments,
   ) onRegister;
 
   const RegisterAppDialog({
@@ -23,6 +25,8 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
   final _nameController = TextEditingController();
   final _pathController = TextEditingController();
   final _aliasesController = TextEditingController();
+  final _workingDirController = TextEditingController();
+  final _argumentsController = TextEditingController();
   String _category = 'custom';
   bool _isSubmitting = false;
   String? _errorMessage;
@@ -32,6 +36,8 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
     _nameController.dispose();
     _pathController.dispose();
     _aliasesController.dispose();
+    _workingDirController.dispose();
+    _argumentsController.dispose();
     super.dispose();
   }
 
@@ -50,9 +56,18 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
         .map((a) => a.trim())
         .where((a) => a.isNotEmpty)
         .toList();
+    final workingDir = _workingDirController.text.trim();
+    final arguments = _argumentsController.text.trim();
 
     try {
-      final success = await widget.onRegister(name, path, rawAliases, _category);
+      final success = await widget.onRegister(
+        name,
+        path,
+        rawAliases,
+        _category,
+        workingDir.isEmpty ? null : workingDir,
+        arguments.isEmpty ? null : arguments,
+      );
       if (mounted) {
         if (success) {
           Navigator.of(context).pop(true);
@@ -78,124 +93,150 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
-        width: 480,
+        width: 500,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.9,
+        ),
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           color: AppTheme.bgSurface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: AppTheme.borderColor),
         ),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.app_registration, color: AppTheme.accent, size: 20),
                     ),
-                    child: const Icon(Icons.app_registration, color: AppTheme.accent, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Teach Momento App',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.textMain,
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Teach Momento App',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textMain,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'Register custom binary or application manually',
-                          style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                          Text(
+                            'Register custom binary or application manually',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                if (_errorMessage != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.danger.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppTheme.danger.withValues(alpha: 0.3)),
+                    ),
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: AppTheme.danger, fontSize: 12),
                     ),
                   ),
+                  const SizedBox(height: 12),
                 ],
-              ),
-              const SizedBox(height: 20),
 
-              if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppTheme.danger.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppTheme.danger.withValues(alpha: 0.3)),
+                const Text('Application Name *', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _nameController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. Notepad++, Blender, CustomTool',
                   ),
-                  child: Text(
-                    _errorMessage!,
-                    style: const TextStyle(color: AppTheme.danger, fontSize: 12),
+                  validator: (val) => val == null || val.trim().isEmpty ? 'Please enter an app name' : null,
+                ),
+                const SizedBox(height: 14),
+
+                const Text('Executable / Binary Path *', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _pathController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: r'e.g. C:\Program Files\Notepad++\notepad++.exe or shortcut (.lnk)',
+                  ),
+                  validator: (val) => val == null || val.trim().isEmpty ? 'Please enter binary path' : null,
+                ),
+                const SizedBox(height: 14),
+
+                const Text('Working Directory (Optional)', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _workingDirController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: r'e.g. C:\Program Files\App (defaults to executable folder)',
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
+                const SizedBox(height: 14),
 
-              const Text('Application Name *', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-              const SizedBox(height: 6),
-              TextFormField(
-                controller: _nameController,
-                style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                  hintText: 'e.g. Notepad++, Blender, CustomTool',
+                const Text('Arguments / Data File Path (Optional)', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _argumentsController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: r'e.g. --config app.json or C:\data\database.db',
+                  ),
                 ),
-                validator: (val) => val == null || val.trim().isEmpty ? 'Please enter an app name' : null,
-              ),
-              const SizedBox(height: 14),
+                const SizedBox(height: 14),
 
-              const Text('Executable / Binary Path *', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-              const SizedBox(height: 6),
-              TextFormField(
-                controller: _pathController,
-                style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                  hintText: r'e.g. C:\Program Files\Notepad++\notepad++.exe',
+                const Text('Search Aliases (Optional, comma-separated)', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _aliasesController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: 'e.g. npp, editor, code',
+                  ),
                 ),
-                validator: (val) => val == null || val.trim().isEmpty ? 'Please enter binary path' : null,
-              ),
-              const SizedBox(height: 14),
+                const SizedBox(height: 14),
 
-              const Text('Search Aliases (Optional, comma-separated)', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-              const SizedBox(height: 6),
-              TextFormField(
-                controller: _aliasesController,
-                style: const TextStyle(fontSize: 13),
-                decoration: const InputDecoration(
-                  hintText: 'e.g. npp, editor, code',
+                const Text('Category', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  initialValue: _category,
+                  dropdownColor: AppTheme.bgCard,
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textMain),
+                  decoration: const InputDecoration(),
+                  items: const [
+                    DropdownMenuItem(value: 'custom', child: Text('Custom Application')),
+                    DropdownMenuItem(value: 'utility', child: Text('Utility & Tools')),
+                    DropdownMenuItem(value: 'development', child: Text('Development & IDE')),
+                    DropdownMenuItem(value: 'graphics', child: Text('Graphics & Media')),
+                    DropdownMenuItem(value: 'internet', child: Text('Internet & Browser')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) setState(() => _category = val);
+                  },
                 ),
-              ),
-              const SizedBox(height: 14),
-
-              const Text('Category', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-              const SizedBox(height: 6),
-              DropdownButtonFormField<String>(
-                initialValue: _category,
-                dropdownColor: AppTheme.bgCard,
-                style: const TextStyle(fontSize: 13, color: AppTheme.textMain),
-                decoration: const InputDecoration(),
-                items: const [
-                  DropdownMenuItem(value: 'custom', child: Text('Custom Application')),
-                  DropdownMenuItem(value: 'utility', child: Text('Utility & Tools')),
-                  DropdownMenuItem(value: 'development', child: Text('Development & IDE')),
-                  DropdownMenuItem(value: 'graphics', child: Text('Graphics & Media')),
-                  DropdownMenuItem(value: 'internet', child: Text('Internet & Browser')),
-                ],
-                onChanged: (val) {
-                  if (val != null) setState(() => _category = val);
-                },
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
 
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -227,6 +268,7 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

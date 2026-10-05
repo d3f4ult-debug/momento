@@ -288,12 +288,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (context) {
         return RegisterAppDialog(
-          onRegister: (name, binaryPath, aliases, category) async {
+          onRegister: (name, binaryPath, aliases, category, workingDir, arguments) async {
             final res = await widget.bridgeService.registerApp(
               name: name,
               binaryPath: binaryPath,
               aliases: aliases,
               category: category,
+              workingDir: workingDir,
+              arguments: arguments,
             );
             return res['success'] == true;
           },

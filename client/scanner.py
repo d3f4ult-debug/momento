@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from client.config import MOMENTO_DIR, REGISTRY_PATH, ensure_momento_dir
 
@@ -147,6 +147,148 @@ KNOWN_LINUX_APPS = [
 ]
 
 
+def resolve_shortcut_or_target(
+    path: str,
+    working_dir: Optional[str] = None,
+    args: Optional[Union[str, List[str]]] = None
+) -> Tuple[str, Optional[str], List[str]]:
+    """
+    Robustly resolves application binaries, handling:
+    1. Windows shortcuts (.lnk) -> parses target executable, working directory, arguments.
+    2. Directories -> discovers the primary application executable and sets working directory.
+    3. Direct binary files -> resolves absolute path and default working directory.
+    4. PATH commands -> resolves to installed binary location.
+
+    Returns:
+        (resolved_binary_path, effective_working_dir, effective_arguments_list)
+    """
+    import shlex
+
+    arg_list: List[str] = []
+    if isinstance(args, list):
+        arg_list = [str(a) for a in args]
+    elif isinstance(args, str) and args.strip():
+        try:
+            arg_list = shlex.split(args.strip(), posix=False)
+        except Exception:
+            arg_list = args.strip().split()
+
+    raw_path = (path or "").strip().strip("\"'")
+    if not raw_path:
+        return "", working_dir, arg_list
+
+    clean_path = os.path.expandvars(os.path.expanduser(raw_path))
+    resolved_cwd = working_dir
+    if resolved_cwd:
+        resolved_cwd = os.path.normpath(os.path.expandvars(os.path.expanduser(resolved_cwd.strip().strip("\"'"))))
+
+    # 1. Check if path is a Windows shortcut (.lnk)
+    if clean_path.lower().endswith(".lnk") and os.path.exists(clean_path):
+        target_found: Optional[str] = None
+        lnk_cwd: Optional[str] = None
+        lnk_args: Optional[str] = None
+
+        try:
+            import pylnk3
+            lnk = pylnk3.parse(clean_path)
+            raw_target = lnk.path or getattr(lnk, "target_full_path", None)
+            if raw_target:
+                target_found = os.path.expandvars(raw_target)
+            lnk_cwd = getattr(lnk, "working_dir", None)
+            if lnk_cwd:
+                lnk_cwd = os.path.expandvars(lnk_cwd)
+            lnk_args = getattr(lnk, "arguments", None)
+        except Exception:
+            pass
+
+        if not target_found and sys.platform == "win32":
+            try:
+                import subprocess
+                ps_script = (
+                    f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{clean_path}'); "
+                    "Write-Output ($s.TargetPath + '|||' + $s.WorkingDirectory + '|||' + $s.Arguments)"
+                )
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                    text=True,
+                    timeout=5
+                ).strip()
+                if "|||" in out:
+                    parts = out.split("|||")
+                    if parts[0].strip():
+                        target_found = parts[0].strip()
+                    if len(parts) > 1 and parts[1].strip():
+                        lnk_cwd = parts[1].strip()
+                    if len(parts) > 2 and parts[2].strip():
+                        lnk_args = parts[2].strip()
+            except Exception:
+                pass
+
+        if target_found:
+            clean_path = os.path.normpath(target_found)
+            if not resolved_cwd and lnk_cwd and os.path.isdir(lnk_cwd):
+                resolved_cwd = os.path.normpath(lnk_cwd)
+            if not arg_list and lnk_args:
+                try:
+                    arg_list = shlex.split(lnk_args.strip(), posix=False)
+                except Exception:
+                    arg_list = lnk_args.strip().split()
+
+    # 2. Check if clean_path is a directory
+    if os.path.isdir(clean_path):
+        dir_path = os.path.normpath(os.path.abspath(clean_path))
+        if not resolved_cwd:
+            resolved_cwd = dir_path
+
+        base_name = os.path.basename(dir_path).lower()
+        candidate_exe: Optional[str] = None
+
+        try:
+            files = os.listdir(dir_path)
+            exe_files = [f for f in files if f.lower().endswith(".exe") and os.path.isfile(os.path.join(dir_path, f))]
+
+            # Direct match with folder name
+            for f in exe_files:
+                if f.lower() == f"{base_name}.exe":
+                    candidate_exe = os.path.join(dir_path, f)
+                    break
+
+            # Filter uninstallers and helpers
+            if not candidate_exe:
+                valid_exes = [
+                    f for f in exe_files
+                    if not any(ign in f.lower() for ign in ["unins", "setup", "update", "crashpad", "helper", "vcredist"])
+                ]
+                if valid_exes:
+                    candidate_exe = os.path.join(dir_path, valid_exes[0])
+                elif exe_files:
+                    candidate_exe = os.path.join(dir_path, exe_files[0])
+
+            # Check subdirectories
+            if not candidate_exe:
+                for sub in ["bin", "app", "Release"]:
+                    sub_dir = os.path.join(dir_path, sub)
+                    if os.path.isdir(sub_dir):
+                        sub_exes = [
+                            f for f in os.listdir(sub_dir)
+                            if f.lower().endswith(".exe") and not any(ign in f.lower() for ign in ["unins", "setup", "update"])
+                        ]
+                        if sub_exes:
+                            candidate_exe = os.path.join(sub_dir, sub_exes[0])
+                            break
+
+            if candidate_exe:
+                clean_path = os.path.normpath(candidate_exe)
+        except Exception:
+            pass
+
+    # 3. Default working directory to executable folder if not provided
+    if not resolved_cwd and os.path.isabs(clean_path) and os.path.isfile(clean_path):
+        resolved_cwd = os.path.dirname(os.path.abspath(clean_path))
+
+    return os.path.normpath(clean_path), resolved_cwd, arg_list
+
+
 class AppScanner:
     """Discovers and catalogs installed software and system tools."""
 
@@ -173,10 +315,13 @@ class AppScanner:
                         break
 
             if found_path:
+                norm_p = os.path.normpath(found_path)
                 discovered[app["id"]] = {
                     "id": app["id"],
                     "name": app["name"],
-                    "binary_path": os.path.normpath(found_path),
+                    "binary_path": norm_p,
+                    "working_dir": os.path.dirname(norm_p) if os.path.isabs(norm_p) else None,
+                    "default_args": [],
                     "aliases": app["aliases"],
                     "category": app.get("category", "utility"),
                     "source": "system_catalog"
@@ -205,10 +350,13 @@ class AppScanner:
 
                     if app_id not in discovered and len(app_id) > 1:
                         clean_name = app_id.replace("-", " ").replace("_", " ").title()
+                        norm_fpath = os.path.normpath(fpath)
                         discovered[app_id] = {
                             "id": app_id,
                             "name": clean_name,
-                            "binary_path": os.path.normpath(fpath),
+                            "binary_path": norm_fpath,
+                            "working_dir": os.path.dirname(norm_fpath) if os.path.isabs(norm_fpath) else None,
+                            "default_args": [],
                             "aliases": [app_id, clean_name.lower()],
                             "category": "cli",
                             "source": "path"
@@ -216,7 +364,45 @@ class AppScanner:
             except (PermissionError, OSError):
                 continue
 
-        # 3. Linux Desktop file scanning
+        # 3. Windows Start Menu Shortcut (.lnk) scanning
+        if sys.platform == "win32":
+            start_dirs = [
+                os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
+                r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+            ]
+            for sdir in start_dirs:
+                if not os.path.isdir(sdir):
+                    continue
+                for root_dir, _, files in os.walk(sdir):
+                    for fname in files:
+                        if not fname.lower().endswith(".lnk"):
+                            continue
+                        full_lnk = os.path.join(root_dir, fname)
+                        try:
+                            res_bin, res_cwd, res_args = resolve_shortcut_or_target(full_lnk)
+                            if res_bin and os.path.isfile(res_bin) and res_bin.lower().endswith(".exe"):
+                                lnk_title = fname[:-4].strip()
+                                lnk_id = re.sub(r"[^a-z0-9]+", "-", lnk_title.lower()).strip("-")
+                                if (
+                                    lnk_id
+                                    and len(lnk_id) > 1
+                                    and lnk_id not in discovered
+                                    and not any(x in lnk_id for x in ["uninstall", "unins", "remove"])
+                                ):
+                                    discovered[lnk_id] = {
+                                        "id": lnk_id,
+                                        "name": lnk_title,
+                                        "binary_path": os.path.normpath(res_bin),
+                                        "working_dir": res_cwd,
+                                        "default_args": res_args,
+                                        "aliases": [lnk_id, lnk_title.lower()],
+                                        "category": "application",
+                                        "source": "start_menu"
+                                    }
+                        except Exception:
+                            continue
+
+        # 4. Linux Desktop file scanning
         if sys.platform != "win32":
             desktop_dirs = ["/usr/share/applications", os.path.expanduser("~/.local/share/applications")]
             for ddir in desktop_dirs:
@@ -261,19 +447,29 @@ class AppScanner:
         name: str,
         binary_path: str,
         aliases: Optional[List[str]] = None,
-        category: str = "custom"
+        category: str = "custom",
+        working_dir: Optional[str] = None,
+        args: Optional[Union[str, List[str]]] = None,
+        data_file_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Manually register a custom application into local registry."""
+        """
+        Manually register a custom application into local registry.
+        Supports Windows shortcuts (.lnk), directories, working directories,
+        arguments, and associated data files.
+        """
         ensure_momento_dir()
         clean_name = name.strip()
-        clean_path = binary_path.strip()
 
-        if not os.path.isabs(clean_path):
-            which_path = shutil.which(clean_path)
-            if which_path:
-                clean_path = which_path
+        resolved_bin, resolved_cwd, resolved_args = resolve_shortcut_or_target(
+            binary_path, working_dir=working_dir, args=args
+        )
 
-        clean_path = os.path.normpath(clean_path)
+        clean_data_path: Optional[str] = None
+        if data_file_path and data_file_path.strip():
+            clean_data_path = os.path.normpath(os.path.expandvars(os.path.expanduser(data_file_path.strip())))
+            if clean_data_path not in resolved_args:
+                resolved_args.append(clean_data_path)
+
         app_id = re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-")
         if not app_id:
             app_id = f"custom-app-{int(datetime.datetime.now().timestamp())}"
@@ -288,7 +484,10 @@ class AppScanner:
         record = {
             "id": app_id,
             "name": clean_name,
-            "binary_path": clean_path,
+            "binary_path": resolved_bin,
+            "working_dir": resolved_cwd,
+            "default_args": resolved_args,
+            "data_file_path": clean_data_path,
             "aliases": sorted(list(alias_set)),
             "category": category or "custom",
             "source": "manual_registration",
@@ -433,8 +632,19 @@ def register_custom_app(
     binary_path: str,
     aliases: Optional[List[str]] = None,
     category: str = "custom",
+    working_dir: Optional[str] = None,
+    args: Optional[Union[str, List[str]]] = None,
+    data_file_path: Optional[str] = None,
     registry_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """Register custom application using AppScanner."""
     scanner = AppScanner(registry_file=registry_file)
-    return scanner.register_custom_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
+    return scanner.register_custom_app(
+        name=name,
+        binary_path=binary_path,
+        aliases=aliases,
+        category=category,
+        working_dir=working_dir,
+        args=args,
+        data_file_path=data_file_path
+    )

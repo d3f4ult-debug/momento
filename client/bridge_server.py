@@ -70,11 +70,23 @@ async def register_custom_app_endpoint(payload: Dict[str, Any] = Body(...)):
     binary_path = payload.get("binary_path", "").strip()
     aliases = payload.get("aliases")
     category = payload.get("category", "custom")
+    working_dir = payload.get("working_dir")
+    args = payload.get("args") or payload.get("arguments")
+    data_file_path = payload.get("data_file_path") or payload.get("data_file")
+
     if not name or not binary_path:
         return JSONResponse(status_code=400, content={"success": False, "error": "Both 'name' and 'binary_path' are required."})
 
     try:
-        res = _bridge_instance.register_app(name=name, binary_path=binary_path, aliases=aliases, category=category)
+        res = _bridge_instance.register_app(
+            name=name,
+            binary_path=binary_path,
+            aliases=aliases,
+            category=category,
+            working_dir=working_dir,
+            args=args,
+            data_file_path=data_file_path,
+        )
         return JSONResponse(status_code=200, content=res)
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})

@@ -347,7 +347,10 @@ def cmd_register(args: argparse.Namespace, api_url: str) -> int:
         name=args.name,
         binary_path=args.binary_path,
         aliases=args.aliases,
-        category=getattr(args, "category", "custom")
+        category=getattr(args, "category", "custom"),
+        working_dir=getattr(args, "working_dir", None),
+        args=getattr(args, "args", None),
+        data_file_path=getattr(args, "data_file", None),
     )
     if getattr(args, "json", False):
         print(json.dumps(res))
@@ -417,6 +420,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_reg.add_argument("binary_path", help="Path to application binary/executable")
     p_reg.add_argument("--aliases", nargs="*", default=None, help="Optional search aliases")
     p_reg.add_argument("--category", default="custom", help="Application category (default: custom)")
+    p_reg.add_argument("--working-dir", "-w", default=None, help="Working directory for the application")
+    p_reg.add_argument("--args", "-a", default=None, help="Default arguments to pass to the binary")
+    p_reg.add_argument("--data-file", "-d", default=None, help="Associated data file path (e.g. database or config)")
     p_reg.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # launch

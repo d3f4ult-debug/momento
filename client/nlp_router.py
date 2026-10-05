@@ -105,8 +105,26 @@ class NLPRouter:
         m_reg = re.match(r"^(?:register|teach|add)\s+(?:app\s+)?(.+?)\s+(?:at|path|from)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m_reg:
             app_name = m_reg.group(1).strip()
-            app_path = m_reg.group(2).strip().strip('"\'')
-            return ("register", app_name, [app_path])
+            rest = m_reg.group(2).strip()
+            working_dir = None
+            custom_args = None
+            app_path = rest
+
+            if " with args " in app_path:
+                app_path, raw_args = app_path.split(" with args ", 1)
+                custom_args = raw_args.strip()
+
+            if " in " in app_path:
+                app_path, raw_dir = app_path.split(" in ", 1)
+                working_dir = raw_dir.strip().strip('"\'')
+
+            app_path = app_path.strip().strip('"\'')
+            reg_args = [app_path]
+            if working_dir:
+                reg_args.append(f"--working-dir={working_dir}")
+            if custom_args:
+                reg_args.append(f"--args={custom_args}")
+            return ("register", app_name, reg_args)
 
         # Compound desktop GUI automation command (e.g. "open notepad and type Hello World")
         try:
@@ -158,11 +176,22 @@ class NLPRouter:
 
         if action == "register" and target and args:
             from client.scanner import register_custom_app
-            rec = register_custom_app(name=target, binary_path=args[0])
+            bin_path = args[0]
+            working_dir = None
+            custom_args = None
+            for a in args[1:]:
+                if a.startswith("--working-dir="):
+                    working_dir = a.split("=", 1)[1]
+                elif a.startswith("--args="):
+                    custom_args = a.split("=", 1)[1]
+            rec = register_custom_app(name=target, binary_path=bin_path, working_dir=working_dir, args=custom_args)
+            cwd_str = f"\n  [+] Working Dir: {rec.get('working_dir')}" if rec.get('working_dir') else ""
+            args_str = f"\n  [+] Arguments:   {' '.join(rec.get('default_args', []))}" if rec.get('default_args') else ""
             msg = (
                 f"Momento: Registered custom application '{rec['name']}' successfully.\n"
                 f"  [+] App ID:      {rec['id']}\n"
-                f"  [+] Binary Path: {rec['binary_path']}\n"
+                f"  [+] Binary Path: {rec['binary_path']}"
+                f"{cwd_str}{args_str}\n"
                 f"  [+] Aliases:     {', '.join(rec['aliases'])}\n"
                 f"You can now launch it anytime by saying 'Momento, open {rec['name']}'."
             )

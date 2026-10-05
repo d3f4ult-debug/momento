@@ -39,5 +39,7 @@ void main() {
     expect(find.text('Teach Momento App'), findsOneWidget);
     expect(find.text('Application Name *'), findsOneWidget);
     expect(find.text('Executable / Binary Path *'), findsOneWidget);
+    expect(find.text('Working Directory (Optional)'), findsOneWidget);
+    expect(find.text('Arguments / Data File Path (Optional)'), findsOneWidget);
   });
 }
