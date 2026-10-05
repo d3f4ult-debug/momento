@@ -84,5 +84,15 @@ void main() {
       expect(customBridge.backendUrl, 'http://127.0.0.1:8000');
       expect(customBridge.executionMode, 'local');
     });
+
+    test('Project root and Python executable resolution', () async {
+      final bridge = BridgeService();
+      final root = bridge.findProjectRoot();
+      expect(root, isNotNull);
+      expect(root!.path, contains('joyful-hypatia'));
+
+      final py = await bridge.getPythonExecutable();
+      expect(py, isNotEmpty);
+    });
   });
 }

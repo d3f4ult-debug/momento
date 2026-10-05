@@ -20,22 +20,171 @@ class BridgeService {
 
   String _cleanUrl(String url) => url.endsWith('/') ? url.substring(0, url.length - 1) : url;
 
-  /// Find Python executable (checks local workspace venv and system PATH)
-  Future<String> _getPythonExecutable() async {
-    final currentDir = Directory.current.path;
-    final candidates = [
-      '$currentDir\\venv\\Scripts\\python.exe',
-      '$currentDir\\..\\venv\\Scripts\\python.exe',
-      'python',
-      'python3',
-      'py',
-    ];
-    for (final candidate in candidates) {
-      if (candidate.endsWith('.exe')) {
-        if (await File(candidate).exists()) return candidate;
+  bool _isDaemonStarting = false;
+
+  /// Locate the Momento project root directory containing momento_cli.py and client/
+  Directory? findProjectRoot() {
+    // 1. Check explicit environment override
+    final envRoot = Platform.environment['MOMENTO_PROJECT_ROOT'];
+    if (envRoot != null && envRoot.trim().isNotEmpty) {
+      final dir = Directory(envRoot.trim());
+      if (dir.existsSync()) return dir;
+    }
+
+    // 2. Candidate starting directories: executable directory and working directory
+    final startingDirs = <Directory>[];
+    try {
+      final exe = File(Platform.resolvedExecutable);
+      startingDirs.add(exe.parent);
+    } catch (_) {}
+    startingDirs.add(Directory.current);
+
+    // 3. Traverse upwards looking for project markers
+    for (final start in startingDirs) {
+      var current = start.absolute;
+      for (int i = 0; i < 8; i++) {
+        final cliFile = File('${current.path}${Platform.pathSeparator}momento_cli.py');
+        final bridgeFile = File('${current.path}${Platform.pathSeparator}client${Platform.pathSeparator}bridge_server.py');
+        if (cliFile.existsSync() || bridgeFile.existsSync()) {
+          return current;
+        }
+        final parent = current.parent;
+        if (parent.path == current.path) break;
+        current = parent;
       }
     }
-    return 'python';
+    return null;
+  }
+
+  /// Find Python executable (checks local workspace venv and system PATH)
+  Future<String> getPythonExecutable() async {
+    final root = findProjectRoot();
+    final candidates = <String>[];
+
+    if (root != null) {
+      if (Platform.isWindows) {
+        candidates.add('${root.path}\\venv\\Scripts\\python.exe');
+        candidates.add('${root.path}\\.venv\\Scripts\\python.exe');
+      } else {
+        candidates.add('${root.path}/venv/bin/python');
+        candidates.add('${root.path}/.venv/bin/python');
+      }
+    }
+
+    final currentDir = Directory.current.path;
+    if (Platform.isWindows) {
+      candidates.add('$currentDir\\venv\\Scripts\\python.exe');
+      candidates.add('$currentDir\\..\\venv\\Scripts\\python.exe');
+    } else {
+      candidates.add('$currentDir/venv/bin/python');
+      candidates.add('$currentDir/../venv/bin/python');
+    }
+
+    for (final candidate in candidates) {
+      if (await File(candidate).exists()) return candidate;
+    }
+
+    return Platform.isWindows ? 'python' : 'python3';
+  }
+
+  /// Get environment variables with PYTHONPATH pointing to project root
+  Map<String, String> _getPythonEnvironment(Directory? root) {
+    final env = Map<String, String>.from(Platform.environment);
+    if (root != null) {
+      env['PYTHONPATH'] = root.path;
+      env['MOMENTO_PROJECT_ROOT'] = root.path;
+    }
+    return env;
+  }
+
+  /// Get absolute path to momento_cli.py
+  String _getMomentoCliPath(Directory? root) {
+    if (root != null) {
+      final cli = File('${root.path}${Platform.pathSeparator}momento_cli.py');
+      if (cli.existsSync()) return cli.path;
+    }
+    return 'momento_cli.py';
+  }
+
+  /// Run Python subprocess with project root working directory and environment
+  Future<ProcessResult> runPythonProcess(
+    String py,
+    List<String> args,
+  ) async {
+    final root = findProjectRoot();
+    final workingDir = root?.path ?? Directory.current.path;
+    final env = _getPythonEnvironment(root);
+    return Process.run(
+      py,
+      args,
+      workingDirectory: workingDir,
+      environment: env,
+    );
+  }
+
+  /// Check if the local bridge server HTTP daemon is currently responding
+  Future<bool> isDaemonRunning() async {
+    for (final url in ['http://127.0.0.1:8000', 'http://localhost:8000']) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/state'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(milliseconds: 600));
+        if (res.statusCode == 200) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /// Ensure the Python bridge server daemon is running, spinning it up if necessary
+  Future<bool> ensureDaemonRunning() async {
+    if (await isDaemonRunning()) return true;
+
+    if (_isDaemonStarting) {
+      for (int i = 0; i < 10; i++) {
+        await Future.delayed(const Duration(milliseconds: 250));
+        if (await isDaemonRunning()) return true;
+      }
+      return false;
+    }
+
+    _isDaemonStarting = true;
+    try {
+      final root = findProjectRoot();
+      final py = await getPythonExecutable();
+      final bridgeScript = root != null
+          ? '${root.path}${Platform.pathSeparator}client${Platform.pathSeparator}bridge_server.py'
+          : 'client/bridge_server.py';
+
+      final workingDir = root?.path ?? Directory.current.path;
+      final env = _getPythonEnvironment(root);
+      env['MOMENTO_BRIDGE_PORT'] = '8000';
+
+      debugPrint('[BridgeService] Spinning up background Python bridge daemon: $py $bridgeScript (cwd: $workingDir)');
+
+      await Process.start(
+        py,
+        [bridgeScript],
+        workingDirectory: workingDir,
+        environment: env,
+        mode: ProcessStartMode.detached,
+      );
+
+      // Poll until the daemon is online or timeout (up to 4.5 seconds)
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (await isDaemonRunning()) {
+          debugPrint('[BridgeService] Connected to background bridge daemon at http://127.0.0.1:8000');
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint('[BridgeService] Error starting background daemon: $e');
+    } finally {
+      _isDaemonStarting = false;
+    }
+
+    return await isDaemonRunning();
   }
 
   /// Get ordered list of candidate URLs for given execution mode
@@ -62,6 +211,11 @@ class BridgeService {
 
   /// Fetch initial state: setup status, permissions, discovered apps, active sessions
   Future<Map<String, dynamic>> fetchInitialState() async {
+    // Automatically ensure background daemon is running for local/hybrid workflow
+    if (executionMode == AppConfig.modeLocal || executionMode == AppConfig.modeHybrid) {
+      await ensureDaemonRunning();
+    }
+
     final urls = _getCandidateUrls();
     for (final url in urls) {
       try {
@@ -132,6 +286,10 @@ class BridgeService {
       backendUrl = _cleanUrl(newBackendUrl.trim());
     }
 
+    if (executionMode == AppConfig.modeLocal || executionMode == AppConfig.modeHybrid) {
+      await ensureDaemonRunning();
+    }
+
     final urls = _getCandidateUrls();
     for (final url in urls) {
       try {
@@ -160,9 +318,11 @@ class BridgeService {
 
   /// Run local Python scanner fallback
   Future<Map<String, dynamic>> _runLocalScannerFallback() async {
-    final py = await _getPythonExecutable();
+    final py = await getPythonExecutable();
+    final root = findProjectRoot();
+    final cli = _getMomentoCliPath(root);
     try {
-      final proc = await Process.run(py, ['momento_cli.py', 'setup', '--non-interactive']);
+      final proc = await runPythonProcess(py, [cli, 'setup', '--non-interactive']);
       if (proc.exitCode == 0) {
         isSetupCompleted = true;
         final state = await _readLocalStateFallback();
@@ -181,6 +341,10 @@ class BridgeService {
 
   /// Rescan applications
   Future<List<AppInfo>> rescanApps() async {
+    if (executionMode == AppConfig.modeLocal || executionMode == AppConfig.modeHybrid) {
+      await ensureDaemonRunning();
+    }
+
     final urls = _getCandidateUrls();
     for (final url in urls) {
       try {
@@ -198,9 +362,11 @@ class BridgeService {
     }
 
     // Fallback
-    final py = await _getPythonExecutable();
+    final py = await getPythonExecutable();
+    final root = findProjectRoot();
+    final cli = _getMomentoCliPath(root);
     try {
-      await Process.run(py, ['momento_cli.py', 'scan']);
+      await runPythonProcess(py, [cli, 'scan']);
       final state = await _readLocalStateFallback();
       final rawApps = state['discovered_apps'] as List<dynamic>? ?? [];
       return rawApps.map((e) => AppInfo.fromJson(e as Map<String, dynamic>)).toList();
@@ -212,6 +378,10 @@ class BridgeService {
   /// Send conversational command (e.g. "Momento, open notepad" or "Run Calculator")
   Future<Map<String, dynamic>> sendMessage(String message, {String? mode}) async {
     final effMode = mode ?? executionMode;
+    if (effMode == AppConfig.modeLocal || effMode == AppConfig.modeHybrid) {
+      await ensureDaemonRunning();
+    }
+
     final urls = _getCandidateUrls(mode: effMode);
 
     for (final url in urls) {
@@ -238,9 +408,11 @@ class BridgeService {
     return _runPythonExecutionFallback(message, effMode);
   }
 
-  /// Robust Python execution fallback invoking DesktopAppBridge directly
+  /// Robust Python execution fallback invoking DesktopAppBridge directly with absolute paths & working directory
   Future<Map<String, dynamic>> _runPythonExecutionFallback(String message, String mode) async {
-    final py = await _getPythonExecutable();
+    final py = await getPythonExecutable();
+    final root = findProjectRoot();
+    final cli = _getMomentoCliPath(root);
 
     // 1. Direct Python invocation of DesktopAppBridge
     try {
@@ -250,7 +422,7 @@ class BridgeService {
           "res = b.send_message(sys.argv[1], execution_mode=sys.argv[2]); "
           "print(json.dumps(res))";
 
-      final proc = await Process.run(py, ['-c', script, message, mode]);
+      final proc = await runPythonProcess(py, ['-c', script, message, mode]);
       final out = proc.stdout.toString().trim();
       if (out.isNotEmpty) {
         try {
@@ -264,7 +436,7 @@ class BridgeService {
 
     // 2. Fallback to momento_cli.py chat command
     try {
-      final proc = await Process.run(py, ['momento_cli.py', 'chat', message, '--mode', mode, '--json']);
+      final proc = await runPythonProcess(py, [cli, 'chat', message, '--mode', mode, '--json']);
       final out = proc.stdout.toString().trim();
       if (out.isNotEmpty) {
         try {
@@ -276,7 +448,7 @@ class BridgeService {
 
     // 3. Fallback to generic command execution
     try {
-      final proc = await Process.run(py, ['momento_cli.py', message]);
+      final proc = await runPythonProcess(py, [cli, message]);
       final out = proc.stdout.toString().trim();
       final err = proc.stderr.toString().trim();
       final msg = out.isNotEmpty ? out : err;
@@ -317,12 +489,12 @@ class BridgeService {
     // Python direct fallback for local session logs
     if (sessionId.startsWith('sbx_local_')) {
       try {
-        final py = await _getPythonExecutable();
+        final py = await getPythonExecutable();
         final script = "import json, sys; "
             "from client.desktop_bridge import DesktopAppBridge; "
             "b = DesktopAppBridge(); "
             "print(json.dumps(b.get_session_logs(sys.argv[1])))";
-        final proc = await Process.run(py, ['-c', script, sessionId]);
+        final proc = await runPythonProcess(py, ['-c', script, sessionId]);
         final out = proc.stdout.toString().trim();
         if (out.isNotEmpty) {
           return jsonDecode(out) as Map<String, dynamic>;
@@ -358,12 +530,12 @@ class BridgeService {
     // Python direct fallback for stopping local process
     if (sessionId.startsWith('sbx_local_')) {
       try {
-        final py = await _getPythonExecutable();
+        final py = await getPythonExecutable();
         final script = "import json, sys; "
             "from client.desktop_bridge import DesktopAppBridge; "
             "b = DesktopAppBridge(); "
             "print(json.dumps(b.stop_session(sys.argv[1])))";
-        final proc = await Process.run(py, ['-c', script, sessionId]);
+        final proc = await runPythonProcess(py, ['-c', script, sessionId]);
         final out = proc.stdout.toString().trim();
         if (out.isNotEmpty) {
           final data = jsonDecode(out) as Map<String, dynamic>;
