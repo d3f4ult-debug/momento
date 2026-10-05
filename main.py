@@ -3412,6 +3412,16 @@ async def sandbox_stop_endpoint(
     return JSONResponse(status_code=status_code, content=res)
 
 
+# ==============================================================================
+# Mount Client Bridge API
+# ==============================================================================
+try:
+    from client.bridge_server import client_router
+    app.include_router(client_router)
+except Exception as _e:
+    logger.warning(f"Failed to mount client_router: {_e}")
+
+
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
