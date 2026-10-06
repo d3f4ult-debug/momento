@@ -138,10 +138,21 @@ class NLPRouter:
         m_profile = re.match(r"^(?:reverse[\s\-_]*engineer|profile|analyze|learn)\s+(?:app\s+)?(.+)$", clean, flags=re.IGNORECASE)
         if m_profile:
             raw_tgt = m_profile.group(1).strip()
-            if not raw_tgt or raw_tgt.lower() in ("this app", "the app", "active app", "active", "screen", "current", "this"):
+            if not raw_tgt or raw_tgt.lower() in (
+                "this app", "the app", "active app", "active", "active window",
+                "active session", "screen", "the screen", "foreground", "foreground window",
+                "current", "current window", "current app", "this", "window", "the window",
+                "active process", "ui"
+            ):
                 return ("profile", "active", None)
             return ("profile", raw_tgt, None)
-        elif lower in ("reverse engineer", "reverse-engineer", "profile", "analyze app", "reverse engineer app", "reverse engineer this app"):
+        elif lower in (
+            "reverse engineer", "reverse-engineer", "profile", "analyze app",
+            "reverse engineer app", "reverse engineer this app", "reverse engineer active",
+            "reverse-engineer active", "profile active", "analyze active", "profile the app",
+            "reverse engineer the app", "reverse engineer foreground", "profile foreground",
+            "reverse engineer current", "profile current", "learn active"
+        ):
             return ("profile", "active", None)
 
         # Profile-driven semantic workflow (e.g. "In Dokonchi, click the login button, enter user X, and submit")
@@ -286,19 +297,19 @@ class NLPRouter:
 
         if action == "profile":
             from client.execution_engine import global_execution_engine
-            target_app = target if (target and target not in ("active", "current", "screen", "this", "this app")) else None
-            if not target_app:
-                # Find active foreground window title
-                from client.gui_automation import inspect_window_ui
-                fg = inspect_window_ui()
-                target_app = fg.get("title") or fg.get("process_name") or "Application"
+            target_app = target if (target and target.lower() not in (
+                "active", "current", "screen", "this", "this app", "foreground",
+                "active window", "the app", "active session", "the screen", "foreground window",
+                "active process", "ui"
+            )) else "active"
 
             prof_res = global_execution_engine.profile_app(target_app)
-            msg = prof_res.get("summary") or f"Application profiling completed for '{target_app}'."
+            actual_name = prof_res.get("app_name") or target_app
+            msg = prof_res.get("summary") or f"Application profiling completed for '{actual_name}'."
             return {
                 "success": prof_res.get("success", True),
                 "action": "profile",
-                "app_name": prof_res.get("app_name") or target_app,
+                "app_name": actual_name,
                 "session_id": prof_res.get("session_id"),
                 "pid": prof_res.get("window", {}).get("pid"),
                 "profile": prof_res,

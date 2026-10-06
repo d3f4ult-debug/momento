@@ -542,6 +542,14 @@ def test_nlp_router_profiling_and_actions():
     assert router.parse_command("analyze this app") == ("profile", "active", None)
     assert router.parse_command("learn Dokonchi") == ("profile", "Dokonchi", None)
 
+    # Active window phrases
+    assert router.parse_command("reverse engineer active") == ("profile", "active", None)
+    assert router.parse_command("reverse-engineer active window") == ("profile", "active", None)
+    assert router.parse_command("profile active") == ("profile", "active", None)
+    assert router.parse_command("analyze active") == ("profile", "active", None)
+    assert router.parse_command("learn active") == ("profile", "active", None)
+    assert router.parse_command("reverse engineer foreground") == ("profile", "active", None)
+
     # Semantic workflow multi-step instruction
     action, target, steps = router.parse_command("In Dokonchi, click the login button, enter user X, and submit")
     assert action == "profile_action"
@@ -560,6 +568,49 @@ def test_desktop_bridge_profiling_commands(temp_bridge):
     assert res_profiles["action"] == "profiles"
     assert "message" in res_profiles
     assert "total_profiles" in res_profiles
+
+
+def test_app_profiler_folder_shortcut_and_active_fallback(tmp_path):
+    """Verify profile_application falls back to active foreground window on folders or shortcuts."""
+    from client.app_profiler import delete_profile, profile_application
+    from client.scanner import register_custom_app
+
+    # 1. Directory / Folder as binary path
+    fake_folder = str(tmp_path / "DokonchiFolderApp")
+    os.makedirs(fake_folder, exist_ok=True)
+    register_custom_app("DokonchiFolder", binary_path=fake_folder)
+
+    # 2. .lnk shortcut file
+    fake_lnk = str(tmp_path / "DokonchiShortcut.lnk")
+    with open(fake_lnk, "wb") as f:
+        f.write(b"FAKE_LNK_DATA")
+    register_custom_app("DokonchiShortcut", binary_path=fake_lnk)
+
+    logs_collected = []
+    def _cb(line):
+        logs_collected.append(line)
+
+    try:
+        # Profile app whose binary is a directory
+        prof1 = profile_application("DokonchiFolder", log_callback=_cb)
+        assert prof1["success"] is True
+        assert any("directory/folder" in line or "Falling back" in line for line in logs_collected)
+
+        # Profile app whose binary is a shortcut
+        logs_collected.clear()
+        prof2 = profile_application("DokonchiShortcut", log_callback=_cb)
+        assert prof2["success"] is True
+        assert any("shortcut (.lnk)" in line or "Falling back" in line for line in logs_collected)
+
+        # Profile active window directly
+        logs_collected.clear()
+        prof3 = profile_application("active", log_callback=_cb)
+        assert prof3["success"] is True
+        assert any("Targeting active foreground window" in line for line in logs_collected)
+    finally:
+        delete_profile("DokonchiFolder")
+        delete_profile("DokonchiShortcut")
+        delete_profile("Active Application")
 
 
 

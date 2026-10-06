@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -301,14 +302,44 @@ def profile_application(
 
     _log(f"[*] Initializing Deep Semantic Profiler for '{app_name_or_path}'...")
 
+    target_clean = (app_name_or_path or "").strip()
+    is_active_intent = not target_clean or target_clean.lower() in (
+        "active", "current", "screen", "foreground", "this app", "this",
+        "window", "the app", "active app", "active window", "active session",
+        "the screen", "foreground window", "current window", "current app", "active process"
+    )
+
+    from client.gui_automation import get_foreground_window_info, inspect_window_ui, list_active_windows
+
     # 1. Resolve application
-    app_record = resolve_app_binary(app_name_or_path)
-    binary_path = app_record["binary_path"] if app_record else app_name_or_path
-    app_name = app_record["name"] if app_record else os.path.splitext(os.path.basename(app_name_or_path))[0].title()
+    app_record = None if is_active_intent else resolve_app_binary(target_clean)
+    binary_path = app_record["binary_path"] if app_record else target_clean
+    app_name = app_record["name"] if app_record else (
+        "Active Application" if is_active_intent else os.path.splitext(os.path.basename(target_clean))[0].title()
+    )
     app_working_dir = app_record.get("working_dir") if app_record else None
     app_id = app_record["id"] if app_record else slugify_app_name(app_name)
 
-    # 2. Attach or launch controlled session
+    # 2. Check if the app is already running on the desktop or if targeting active window
+    running_win_found: Optional[Dict[str, Any]] = None
+    all_active_windows = list_active_windows()
+
+    if is_active_intent:
+        _log("[*] Targeting active foreground window directly...")
+        running_win_found = get_foreground_window_info()
+    else:
+        # Check if already running on the desktop
+        tgt_lower = target_clean.lower()
+        app_lower = app_name.lower()
+        for w in all_active_windows:
+            w_title = w.get("title", "").lower()
+            w_proc = w.get("process_name", "").lower()
+            if (tgt_lower in w_title) or (app_lower in w_title) or (tgt_lower == w_proc) or (app_lower == w_proc):
+                running_win_found = w
+                _log(f"[+] Found already running window for '{app_name}': '{w.get('title')}' (PID: {w.get('pid')}). Attaching directly...")
+                break
+
+    # 3. Attach or launch controlled session
     from client.execution_engine import global_execution_engine
     active_session = None
 
@@ -323,34 +354,78 @@ def profile_application(
                     break
 
     launched_here = False
-    if not active_session and os.path.exists(binary_path):
-        _log(f"[*] Launching '{app_name}' in controlled reverse-engineering session...")
-        launch_res = global_execution_engine.launch(
-            binary_path=binary_path,
-            app_name=app_name,
-            working_dir=app_working_dir
-        )
-        if launch_res.get("success"):
-            session_id = launch_res["session_id"]
-            active_session = global_execution_engine.get_session(session_id)
-            launched_here = True
-            _log(f"[+] Controlled session spawned (PID: {launch_res.get('pid')}, Session: {session_id}).")
-            time.sleep(2.0)  # Wait for UI elements to render
-        else:
-            _log(f"[-] Could not launch binary natively: {launch_res.get('error')}. Attempting foreground search...")
+    # Only attempt launch if not already running on desktop and not active intent
+    if not running_win_found and not active_session and not is_active_intent:
+        can_spawn = False
+        if binary_path and os.path.exists(binary_path):
+            if os.path.isdir(binary_path):
+                _log(f"[-] Target path '{binary_path}' is a directory/folder and cannot be executed directly.")
+            elif binary_path.lower().endswith(".lnk"):
+                _log(f"[-] Target path '{binary_path}' is a shortcut (.lnk) that cannot be directly spawned.")
+            elif os.path.isfile(binary_path):
+                can_spawn = True
+        elif binary_path and shutil.which(binary_path):
+            can_spawn = True
 
-    # 3. Locate target window
-    _log(f"[*] Attaching to window matching '{app_name}'...")
-    from client.gui_automation import inspect_window_ui, list_active_windows
-    
-    target_pid = active_session.process.pid if (active_session and active_session.process) else None
-    window_meta = inspect_window_ui(target=app_name, pid=target_pid, max_controls=max_controls)
+        if can_spawn:
+            _log(f"[*] Launching '{app_name}' in controlled reverse-engineering session...")
+            launch_res = global_execution_engine.launch(
+                binary_path=binary_path,
+                app_name=app_name,
+                working_dir=app_working_dir
+            )
+            if launch_res.get("success"):
+                session_id = launch_res["session_id"]
+                active_session = global_execution_engine.get_session(session_id)
+                launched_here = True
+                _log(f"[+] Controlled session spawned (PID: {launch_res.get('pid')}, Session: {session_id}).")
+                time.sleep(2.0)  # Wait for UI elements to render
+            else:
+                _log(f"[-] Could not launch binary natively: {launch_res.get('error')}. Falling back to active foreground window...")
+        else:
+            _log(f"[*] Target '{target_clean}' resolves to a shortcut/folder or unspawnable path. Falling back to active foreground window...")
+
+    # 4. Locate target window
+    _log(f"[*] Attaching to window for '{app_name}'...")
+    target_pid = active_session.process.pid if (active_session and active_session.process) else (
+        running_win_found.get("pid") if running_win_found else None
+    )
+
+    if running_win_found:
+        window_meta = inspect_window_ui(hwnd=running_win_found.get("handle"), pid=running_win_found.get("pid"), max_controls=max_controls)
+        if not window_meta.get("title") and running_win_found.get("title"):
+            window_meta.update(running_win_found)
+    else:
+        window_meta = inspect_window_ui(target=app_name, pid=target_pid, max_controls=max_controls)
+
+    # 5. Robust Fallback: if no window found or missing handle/pid, attach to GetForegroundWindow
+    if not window_meta.get("title") and not window_meta.get("pid") and not window_meta.get("handle"):
+        _log(f"[-] Could not locate window matching '{app_name}'. Falling back to active foreground window (GetForegroundWindow)...")
+        fg = get_foreground_window_info()
+        if fg and fg.get("title") and fg.get("title") not in ("Program Manager", "Task Switching", "Taskbar"):
+            window_meta = inspect_window_ui(hwnd=fg.get("handle"), pid=fg.get("pid"), max_controls=max_controls)
+            if not window_meta.get("title"):
+                window_meta.update(fg)
+            _log(f"[+] Fallback attached to active window: '{fg.get('title')}' (PID: {fg.get('pid')}, Process: {fg.get('process_name')}).")
+        elif all_active_windows:
+            for w in all_active_windows:
+                if w.get("class_name") not in ("Shell_TrayWnd", "Progman", "WorkerW") and w.get("title"):
+                    window_meta = w
+                    _log(f"[+] Fallback attached to open window: '{w.get('title')}' (PID: {w.get('pid')}).")
+                    break
 
     w_title = window_meta.get("title") or app_name
     w_pid = window_meta.get("pid") or target_pid or 0
     w_class = window_meta.get("class_name") or "StandardWindow"
     w_rect = window_meta.get("rect") or {"left": 0, "top": 0, "right": 0, "bottom": 0, "width": 0, "height": 0}
-    w_proc = window_meta.get("process_name") or os.path.basename(binary_path)
+    w_proc = window_meta.get("process_name") or (os.path.basename(binary_path) if binary_path else "unknown")
+
+    # If active intent or fallback adopted a real window title, update profile metadata
+    if is_active_intent or (app_name in ("Active Application", "Application") and w_title):
+        app_name = w_title
+        app_id = slugify_app_name(w_title)
+    if (not binary_path or os.path.isdir(binary_path) or binary_path.lower().endswith(".lnk")) and window_meta.get("process_path"):
+        binary_path = window_meta["process_path"]
 
     _log(f"[+] Attached to window: '{w_title}' (PID: {w_pid}, Class: {w_class}).")
 

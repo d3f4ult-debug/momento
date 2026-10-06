@@ -297,21 +297,22 @@ class DesktopAppBridge:
                 return self.nlp_router.execute(clean_text)
 
             if action == "profile":
-                target_app = target if (target and target not in ("active", "current", "screen", "this", "this app")) else None
-                if not target_app:
-                    from client.gui_automation import inspect_window_ui
-                    fg = inspect_window_ui()
-                    target_app = fg.get("title") or fg.get("process_name") or "Application"
+                target_app = target if (target and target.lower() not in (
+                    "active", "current", "screen", "this", "this app", "foreground",
+                    "active window", "the app", "active session", "the screen", "foreground window",
+                    "active process", "ui"
+                )) else "active"
 
                 prof_res = self.execution_engine.profile_app(target_app)
+                actual_name = prof_res.get("app_name") or target_app
                 sess_id = prof_res.get("session_id")
                 pid = prof_res.get("window", {}).get("pid")
                 logs = prof_res.get("logs", [])
-                msg = prof_res.get("summary") or f"Application reverse-engineering completed for '{target_app}'."
+                msg = prof_res.get("summary") or f"Application reverse-engineering completed for '{actual_name}'."
                 return {
                     "success": prof_res.get("success", True),
                     "action": "profile",
-                    "app_name": prof_res.get("app_name") or target_app,
+                    "app_name": actual_name,
                     "session_id": sess_id,
                     "pid": pid,
                     "runtime": "local_native",
