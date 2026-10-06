@@ -443,3 +443,123 @@ def test_desktop_bridge_inspection_messaging(temp_bridge):
     assert "windows" in res_windows
 
 
+def test_app_profiler_persistence_and_classification(tmp_path):
+    """Verify profile persistence, control semantic classification, and workflow inference."""
+    from client.app_profiler import (
+        classify_control_semantics,
+        delete_profile,
+        infer_workflows_and_tags,
+        list_profiles,
+        load_profile,
+        resolve_control_from_profile,
+        save_profile,
+    )
+
+    # 1. Test Control Classification
+    c_btn = {"control_type": "Button", "name": "Login", "automation_id": "btnLogin"}
+    role_btn, actions_btn = classify_control_semantics(c_btn)
+    assert role_btn == "login_button"
+    assert "click" in actions_btn
+
+    c_user = {"control_type": "Edit", "name": "Username", "automation_id": "txtUser"}
+    role_user, actions_user = classify_control_semantics(c_user)
+    assert role_user == "username_input"
+    assert "type" in actions_user
+
+    c_search = {"control_type": "Edit", "name": "Search Box", "automation_id": "txtSearch"}
+    role_search, actions_search = classify_control_semantics(c_search)
+    assert role_search == "search_input"
+
+    # 2. Test Capability Inference
+    tags, workflows = infer_workflows_and_tags([
+        {"semantic_role": role_btn, "name": "Login"},
+        {"semantic_role": role_user, "name": "Username"},
+        {"semantic_role": role_search, "name": "Search"}
+    ])
+    assert "authentication" in tags
+    assert "search" in tags
+    assert any(w["name"] == "login" for w in workflows)
+    assert any(w["name"] == "search" for w in workflows)
+
+    # 3. Test Profile Persistence
+    mock_profile = {
+        "app_id": "test_app_profile",
+        "app_name": "TestAppProfile",
+        "binary_path": "C:\\Program Files\\TestApp\\app.exe",
+        "created_at": "2026-10-06T12:00:00",
+        "window": {"title": "Test App Window", "pid": 9999},
+        "stats": {"total_controls": 3, "interactive_controls": 3, "tags_count": 2, "workflows_count": 2},
+        "semantic_tags": tags,
+        "controls": [
+            {"id": "btn_login", "name": "Login", "semantic_role": "login_button", "control_type": "Button", "is_interactive": True},
+            {"id": "input_user", "name": "Username", "semantic_role": "username_input", "control_type": "Edit", "is_interactive": True},
+            {"id": "input_search", "name": "Search Box", "semantic_role": "search_input", "control_type": "Edit", "is_interactive": True}
+        ],
+        "available_workflows": workflows,
+        "summary": "Mock profile summary."
+    }
+
+    path = save_profile(mock_profile)
+    assert os.path.exists(path)
+
+    loaded = load_profile("TestAppProfile")
+    assert loaded is not None
+    assert loaded["app_name"] == "TestAppProfile"
+    assert len(loaded["controls"]) == 3
+
+    # 4. Test Control Resolution from Profile
+    ctrl_login = resolve_control_from_profile(loaded, "login button")
+    assert ctrl_login is not None
+    assert ctrl_login["id"] == "btn_login"
+
+    ctrl_user = resolve_control_from_profile(loaded, "user")
+    assert ctrl_user is not None
+    assert ctrl_user["id"] == "input_user"
+
+    # 5. List and Delete
+    profs = list_profiles()
+    assert any(p["app_id"] == "test_app_profile" for p in profs)
+
+    del_res = delete_profile("TestAppProfile")
+    assert del_res is True
+    assert load_profile("TestAppProfile") is None
+
+
+def test_nlp_router_profiling_and_actions():
+    """Verify NLPRouter recognizes reverse-engineering and profile semantic workflow queries."""
+    from client.nlp_router import NLPRouter
+    router = NLPRouter()
+
+    # Profiles catalog commands
+    assert router.parse_command("profiles") == ("profiles", None, None)
+    assert router.parse_command("list profiles") == ("profiles", None, None)
+    assert router.parse_command("show profiles") == ("profiles", None, None)
+
+    # Profiling / reverse-engineering commands
+    assert router.parse_command("reverse engineer Dokonchi") == ("profile", "Dokonchi", None)
+    assert router.parse_command("reverse-engineer notepad") == ("profile", "notepad", None)
+    assert router.parse_command("profile calc") == ("profile", "calc", None)
+    assert router.parse_command("analyze this app") == ("profile", "active", None)
+    assert router.parse_command("learn Dokonchi") == ("profile", "Dokonchi", None)
+
+    # Semantic workflow multi-step instruction
+    action, target, steps = router.parse_command("In Dokonchi, click the login button, enter user X, and submit")
+    assert action == "profile_action"
+    assert target == "Dokonchi"
+    assert steps == ["click the login button", "enter user X", "submit"]
+
+    action2, target2, steps2 = router.parse_command("In notepad, type Hello World into text editor")
+    assert action2 == "profile_action"
+    assert target2 == "notepad"
+    assert steps2 == ["type Hello World into text editor"]
+
+
+def test_desktop_bridge_profiling_commands(temp_bridge):
+    """Verify DesktopAppBridge handles profile listing and profile inspection."""
+    res_profiles = temp_bridge.send_message("profiles")
+    assert res_profiles["action"] == "profiles"
+    assert "message" in res_profiles
+    assert "total_profiles" in res_profiles
+
+
+

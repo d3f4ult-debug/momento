@@ -147,20 +147,6 @@ def cmd_inspect(args: argparse.Namespace, api_url: str) -> int:
         print(json.dumps(res, indent=2))
         return 0
 
-
-def cmd_windows(args: argparse.Namespace, api_url: str) -> int:
-    """List active visible desktop application windows."""
-    from client.desktop_bridge import DesktopAppBridge
-    bridge = DesktopAppBridge(backend_url=api_url)
-    res = bridge.send_message("list active windows")
-    if getattr(args, "json", False):
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("success") else 1
-    msg = res.get("message", "")
-    if msg:
-        print(msg)
-    return 0 if res.get("success") else 1
-
     print(f"[*] Session Inspection: {res.get('session_id')}")
     print(f"    Status:         {res.get('status')}")
     print(f"    PID:            {res.get('pid')}")
@@ -192,6 +178,48 @@ def cmd_windows(args: argparse.Namespace, api_url: str) -> int:
         for line in stdout[-5:]:
             print(f"      | {line}")
     return 0
+
+
+def cmd_windows(args: argparse.Namespace, api_url: str) -> int:
+    """List active visible desktop application windows."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    res = bridge.send_message("list active windows")
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if msg:
+        print(msg)
+    return 0 if res.get("success") else 1
+
+
+def cmd_profile(args: argparse.Namespace, api_url: str) -> int:
+    """Reverse-engineer application and generate capability profile."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    res = bridge.send_message(f"reverse engineer {args.app_name}")
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if msg:
+        print(msg)
+    return 0 if res.get("success") else 1
+
+
+def cmd_profiles(args: argparse.Namespace, api_url: str) -> int:
+    """List all saved application capability profiles."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    res = bridge.send_message("profiles")
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if msg:
+        print(msg)
+    return 0 if res.get("success") else 1
 
 
 def cmd_sessions(args: argparse.Namespace, api_url: str) -> int:
@@ -471,6 +499,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_windows = subparsers.add_parser("windows", help="List active visible desktop application windows")
     p_windows.add_argument("--json", action="store_true", help="Output raw JSON response")
 
+    # profile
+    p_profile = subparsers.add_parser("profile", help="Reverse-engineer an application and generate capability profile")
+    p_profile.add_argument("app_name", help="Application name, path, or 'active'")
+    p_profile.add_argument("--json", action="store_true", help="Output raw JSON capability profile")
+
+    # profiles
+    p_profiles = subparsers.add_parser("profiles", help="List all saved application capability profiles")
+    p_profiles.add_argument("--json", action="store_true", help="Output raw JSON list of profiles")
+
     # sessions
     p_sessions = subparsers.add_parser("sessions", help="List all tracked sandbox sessions")
     p_sessions.add_argument("--json", action="store_true", help="Output raw JSON response")
@@ -501,7 +538,7 @@ def preprocess_argv(argv: Optional[list]) -> Optional[list]:
     # If first argument is a conversational sentence like "Momento, open notepad" or "what is on screen"
     if len(raw) == 1 and not raw[0].startswith("-"):
         first = raw[0].strip().lower()
-        if any(first.startswith(p) for p in ("momento", "hey momento", "open ", "run ", "launch ", "start ", "stop ", "inspect", "what", "list ")):
+        if any(first.startswith(p) for p in ("momento", "hey momento", "open ", "run ", "launch ", "start ", "stop ", "inspect", "what", "list ", "reverse", "profile", "analyze", "learn", "in ")):
             return ["ask", raw[0]]
 
     # If launch command is present with --args
@@ -561,6 +598,8 @@ def main(argv: Optional[list] = None) -> int:
         "launch": cmd_launch,
         "inspect": cmd_inspect,
         "windows": cmd_windows,
+        "profile": cmd_profile,
+        "profiles": cmd_profiles,
         "sessions": cmd_sessions,
         "stop": cmd_stop,
         "execute": cmd_execute

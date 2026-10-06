@@ -175,4 +175,56 @@ def test_client_chat_contextual_inspection():
     assert "logs" in data
 
 
+def test_client_profiles_endpoints():
+    """Verify profiles REST API endpoints: list, get, analyze, action."""
+    from client.app_profiler import delete_profile, save_profile
+
+    # Mock profile
+    mock_p = {
+        "app_id": "api_test_app",
+        "app_name": "ApiTestApp",
+        "binary_path": "C:\\fake\\app.exe",
+        "stats": {"total_controls": 2, "interactive_controls": 1, "tags_count": 1, "workflows_count": 0},
+        "semantic_tags": ["utility"],
+        "controls": [
+            {"id": "btn_ok", "name": "OK", "semantic_role": "action_button", "control_type": "Button", "is_interactive": True}
+        ],
+        "available_workflows": []
+    }
+    save_profile(mock_p)
+
+    try:
+        # 1. GET /api/client/profiles
+        res_list = http_client.get("/api/client/profiles")
+        assert res_list.status_code == 200
+        data_list = res_list.json()
+        assert data_list["success"] is True
+        assert any(p["app_name"] == "ApiTestApp" for p in data_list["profiles"])
+
+        # 2. GET /api/client/profiles/{app_name}
+        res_get = http_client.get("/api/client/profiles/ApiTestApp")
+        assert res_get.status_code == 200
+        data_get = res_get.json()
+        assert data_get["success"] is True
+        assert data_get["profile"]["app_name"] == "ApiTestApp"
+
+        # 3. GET 404 for missing profile
+        res_missing = http_client.get("/api/client/profiles/NonExistentApp12345")
+        assert res_missing.status_code == 404
+
+        # 4. POST /api/client/profiles/analyze missing target
+        res_bad_analyze = http_client.post("/api/client/profiles/analyze", json={})
+        assert res_bad_analyze.status_code == 400
+
+        # 5. POST /api/client/chat with profiles command
+        res_chat_profs = http_client.post("/api/client/chat", json={"message": "profiles"})
+        assert res_chat_profs.status_code == 200
+        chat_data = res_chat_profs.json()
+        assert chat_data["action"] == "profiles"
+        assert "ApiTestApp" in chat_data["message"]
+    finally:
+        delete_profile("ApiTestApp")
+
+
+
 

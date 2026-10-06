@@ -18,6 +18,7 @@ DEFAULT_BACKEND_URL = os.environ.get("MOMENTO_API_URL", "http://161.97.64.38:800
 MOMENTO_DIR = os.path.expanduser("~/.momento")
 CONFIG_PATH = os.path.join(MOMENTO_DIR, "config.json")
 REGISTRY_PATH = os.path.join(MOMENTO_DIR, "registry.json")
+PROFILES_DIR = os.path.join(MOMENTO_DIR, "profiles")
 
 # Fallback root configuration file
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -32,6 +33,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "execution_rights": False
     },
     "registry_path": REGISTRY_PATH,
+    "profiles_path": PROFILES_DIR,
     "last_scan_time": None,
     "timeout_seconds": 300,
     "version": "1.0.0"
@@ -42,6 +44,14 @@ def ensure_momento_dir() -> str:
     """Ensure ~/.momento directory exists."""
     os.makedirs(MOMENTO_DIR, exist_ok=True)
     return MOMENTO_DIR
+
+
+def ensure_profiles_dir() -> str:
+    """Ensure ~/.momento/profiles directory exists."""
+    ensure_momento_dir()
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    return PROFILES_DIR
+
 
 
 def get_config_file_path() -> str:

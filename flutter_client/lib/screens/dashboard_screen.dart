@@ -199,7 +199,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final action = res['action']?.toString() ?? '';
         final isSuccess = res['success'] == true;
 
-        if ((action == 'launch' || action == 'interact' || (action == 'inspect' && res['session_id'] != null)) && isSuccess) {
+        if ((action == 'launch' || action == 'interact' || action == 'profile' || (action == 'inspect' && res['session_id'] != null)) && isSuccess) {
           final rawLogs = res['logs'];
           final initialLogs = rawLogs is List
               ? rawLogs.map((e) => e.toString()).toList()
@@ -217,10 +217,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             status: res['status']?.toString() ?? 'running',
             logs: initialLogs,
           );
-          final actionVerb = action == 'interact'
-              ? 'Automating'
-              : (action == 'inspect' ? 'Inspected' : 'Launched');
-          _addMomentoMessage('$actionVerb ${execResult.appName} successfully.', result: execResult);
+          final actionVerb = action == 'profile'
+              ? 'Profiled'
+              : (action == 'interact'
+                  ? 'Automating'
+                  : (action == 'inspect' ? 'Inspected' : 'Launched'));
+          final summaryMessage = res['message']?.toString();
+          final messageText = (summaryMessage != null && summaryMessage.isNotEmpty)
+              ? summaryMessage
+              : '$actionVerb ${execResult.appName} successfully.';
+          _addMomentoMessage(messageText, result: execResult);
           _pollActiveSessions();
         } else if (action == 'register' && isSuccess) {
           final replyText = res['message']?.toString() ?? 'Application registered successfully.';
@@ -312,6 +318,86 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _showProfileAppDialog() async {
+    final controller = TextEditingController();
+    final target = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppTheme.bgSurface,
+          title: const Row(
+            children: [
+              Icon(Icons.psychology_outlined, color: Color(0xFF10B981), size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Reverse-Engineer & Profile App',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textMain),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Deeply traverse UI controls, map interactive elements, and build a semantic capability profile for natural-language automation.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13, color: AppTheme.textMain),
+                decoration: InputDecoration(
+                  labelText: 'Application Name or "active"',
+                  hintText: 'e.g. notepad, calc, or Dokonchi',
+                  labelStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                  hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                  filled: true,
+                  fillColor: AppTheme.bgDark,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppTheme.borderColor),
+                  ),
+                ),
+                onSubmitted: (val) {
+                  if (val.trim().isNotEmpty) {
+                    Navigator.pop(context, val.trim());
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                final text = controller.text.trim();
+                if (text.isNotEmpty) {
+                  Navigator.pop(context, text);
+                }
+              },
+              icon: const Icon(Icons.flash_on, size: 14),
+              label: const Text('Profile App', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF10B981),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (target != null && target.isNotEmpty && mounted) {
+      _handleSendMessage('Momento, reverse engineer $target');
+    }
+  }
+
   void _clearChat() {
     setState(() {
       _messages.clear();
@@ -349,6 +435,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onRescan: _handleRescan,
             onOpenSettings: _showSettingsDialog,
             onRegisterApp: _showRegisterAppDialog,
+            onProfileApp: _showProfileAppDialog,
           ),
 
           // Right Main Area

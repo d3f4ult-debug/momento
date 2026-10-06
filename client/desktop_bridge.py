@@ -223,7 +223,7 @@ class DesktopAppBridge:
                 }
 
         # 1. Handle non-launch commands
-        if action in ("sessions", "stop", "inspect", "list_windows", "scan", "help"):
+        if action in ("sessions", "stop", "inspect", "list_windows", "scan", "help", "profiles", "profile", "profile_action"):
             # For sessions, combine local sessions and remote VPS sessions
             if action == "sessions":
                 local_sess = self.execution_engine.list_sessions()
@@ -292,6 +292,37 @@ class DesktopAppBridge:
 
             if action == "scan":
                 return self.rescan_apps()
+
+            if action == "profiles":
+                return self.nlp_router.execute(clean_text)
+
+            if action == "profile":
+                target_app = target if (target and target not in ("active", "current", "screen", "this", "this app")) else None
+                if not target_app:
+                    from client.gui_automation import inspect_window_ui
+                    fg = inspect_window_ui()
+                    target_app = fg.get("title") or fg.get("process_name") or "Application"
+
+                prof_res = self.execution_engine.profile_app(target_app)
+                sess_id = prof_res.get("session_id")
+                pid = prof_res.get("window", {}).get("pid")
+                logs = prof_res.get("logs", [])
+                msg = prof_res.get("summary") or f"Application reverse-engineering completed for '{target_app}'."
+                return {
+                    "success": prof_res.get("success", True),
+                    "action": "profile",
+                    "app_name": prof_res.get("app_name") or target_app,
+                    "session_id": sess_id,
+                    "pid": pid,
+                    "runtime": "local_native",
+                    "status": "running" if sess_id else "completed",
+                    "message": msg,
+                    "logs": logs,
+                    "profile": prof_res
+                }
+
+            if action == "profile_action":
+                return self.nlp_router.execute(clean_text)
 
             return self.nlp_router.execute(clean_text)
 
@@ -447,4 +478,18 @@ class DesktopAppBridge:
         """List active visible top-level windows on desktop."""
         from client.gui_automation import list_active_windows
         return list_active_windows()
+
+    def list_profiles(self) -> List[Dict[str, Any]]:
+        """List all saved App Capability Profiles."""
+        from client.app_profiler import list_profiles
+        return list_profiles()
+
+    def get_profile(self, app_name: str) -> Optional[Dict[str, Any]]:
+        """Fetch App Capability Profile for given app name."""
+        from client.app_profiler import load_profile
+        return load_profile(app_name)
+
+    def profile_app(self, app_name: str) -> Dict[str, Any]:
+        """Deep reverse-engineer application and generate capability profile."""
+        return self.execution_engine.profile_app(app_name)
 

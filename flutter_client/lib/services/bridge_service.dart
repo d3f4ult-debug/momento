@@ -639,4 +639,91 @@ class BridgeService {
       return true; // Saved in memory
     }
   }
+
+  /// List saved App Capability Profiles
+  Future<List<Map<String, dynamic>>> listProfiles() async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/profiles'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 3));
+
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final profs = data['profiles'] as List? ?? [];
+          return profs.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+
+    // Direct Python fallback
+    try {
+      final py = await getPythonExecutable();
+      final script = "import json; from client.app_profiler import list_profiles; print(json.dumps(list_profiles()))";
+      final proc = await runPythonProcess(py, ['-c', script]);
+      final out = proc.stdout.toString().trim();
+      if (out.isNotEmpty) {
+        final data = jsonDecode(out) as List;
+        return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+
+    return [];
+  }
+
+  /// Trigger deep reverse-engineering / capability profiling for an application
+  Future<Map<String, dynamic>> profileApp(String appName) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/profiles/analyze'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'target': appName}),
+        ).timeout(const Duration(seconds: 15));
+
+        if (res.statusCode == 200) {
+          return jsonDecode(res.body) as Map<String, dynamic>;
+        }
+      } catch (_) {}
+    }
+
+    // Fallback to sending chat command
+    return sendMessage('reverse engineer $appName');
+  }
+
+  /// Execute a semantic profile-driven action
+  Future<Map<String, dynamic>> executeProfileSemanticAction({
+    required String appName,
+    required String action,
+    required String target,
+    String? value,
+  }) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/profiles/$appName/action'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({
+            'action': action,
+            'target': target,
+            'value': value,
+          }),
+        ).timeout(const Duration(seconds: 10));
+
+        if (res.statusCode == 200) {
+          return jsonDecode(res.body) as Map<String, dynamic>;
+        }
+      } catch (_) {}
+    }
+
+    // Direct fallback via chat
+    return sendMessage('in $appName, $action $target ${value ?? ""}');
+  }
 }

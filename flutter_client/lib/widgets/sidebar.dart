@@ -17,6 +17,7 @@ class Sidebar extends StatefulWidget {
   final VoidCallback onRescan;
   final VoidCallback onOpenSettings;
   final VoidCallback? onRegisterApp;
+  final VoidCallback? onProfileApp;
 
   const Sidebar({
     super.key,
@@ -30,6 +31,7 @@ class Sidebar extends StatefulWidget {
     required this.onRescan,
     required this.onOpenSettings,
     this.onRegisterApp,
+    this.onProfileApp,
   });
 
   @override
@@ -192,6 +194,23 @@ class _SidebarState extends State<Sidebar> {
                       style: OutlinedButton.styleFrom(
                         backgroundColor: AppTheme.accent.withValues(alpha: 0.08),
                         side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.4)),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (widget.onProfileApp != null) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: widget.onProfileApp,
+                      icon: const Icon(Icons.psychology_outlined, size: 14, color: Color(0xFF10B981)),
+                      label: const Text('⚡ Profile & Learn App', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF10B981))),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981).withValues(alpha: 0.08),
+                        side: BorderSide(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                       ),

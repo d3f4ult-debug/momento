@@ -167,6 +167,62 @@ async def inspect_ui_endpoint(payload: Dict[str, Any] = Body(default={})):
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
+@client_router.get("/profiles")
+async def list_profiles_endpoint():
+    """List all saved App Capability Profiles."""
+    try:
+        profiles = _bridge_instance.list_profiles()
+        return JSONResponse(status_code=200, content={"success": True, "total_profiles": len(profiles), "profiles": profiles})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@client_router.post("/profiles/analyze")
+async def profile_application_endpoint(payload: Dict[str, Any] = Body(default={})):
+    """Deep reverse-engineer application and generate capability profile."""
+    target = payload.get("target") or payload.get("app_name")
+    if not target:
+        return JSONResponse(status_code=400, content={"success": False, "error": "'target' or 'app_name' required."})
+    try:
+        res = _bridge_instance.profile_app(target)
+        status_code = 200 if res.get("success", True) else 400
+        return JSONResponse(status_code=status_code, content={"success": True, "profile": res, **res})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@client_router.get("/profiles/{app_name}")
+async def get_profile_endpoint(app_name: str):
+    """Retrieve capability profile for a specific application."""
+    try:
+        profile = _bridge_instance.get_profile(app_name)
+        if not profile:
+            return JSONResponse(status_code=404, content={"success": False, "error": f"Profile for '{app_name}' not found."})
+        return JSONResponse(status_code=200, content={"success": True, "profile": profile})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@client_router.post("/profiles/{app_name}/action")
+async def execute_profile_action_endpoint(app_name: str, payload: Dict[str, Any] = Body(...)):
+    """Execute high-level semantic action mapped to application profile."""
+    from client.app_profiler import execute_profile_semantic_action
+    action_type = payload.get("action", "click")
+    target_descriptor = payload.get("target") or payload.get("control", "")
+    param_value = payload.get("value")
+    try:
+        res = execute_profile_semantic_action(
+            app_name=app_name,
+            action_type=action_type,
+            target_descriptor=target_descriptor,
+            param_value=param_value
+        )
+        status_code = 200 if res.get("success", False) else 400
+        return JSONResponse(status_code=status_code, content=res)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
 
 def create_standalone_bridge_app() -> FastAPI:
     """Create a lightweight standalone FastAPI app containing only client routes."""

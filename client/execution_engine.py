@@ -285,6 +285,33 @@ class ExecutionEngine:
 
         return inspection
 
+    def profile_app(self, app_name_or_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Deep reverse-engineer and profile target application.
+        Appends live reverse-engineering log lines into session logs for streaming to live cards.
+        """
+        from client.app_profiler import profile_application
+
+        session = self.get_session(session_id) if session_id else None
+
+        captured_logs: List[str] = []
+        def _stream(msg: str):
+            captured_logs.append(msg)
+            if session:
+                session.append_log(msg)
+
+        profile = profile_application(
+            app_name_or_path=app_name_or_path,
+            session_id=session_id,
+            log_callback=_stream
+        )
+
+        active = session or (self.get_session(profile.get("session_id")) if profile.get("session_id") else None) or self.get_active_session()
+        profile["session_id"] = profile.get("session_id") or (active.session_id if active else None)
+        profile["logs"] = list(active.logs) if active else captured_logs
+        profile["success"] = True
+        return profile
+
     def list_sessions(self) -> List[Dict[str, Any]]:
         """List all active and recent local sessions."""
         with self._lock:

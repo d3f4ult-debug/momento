@@ -128,6 +128,31 @@ class NLPRouter:
                 return ("inspect", "active", None)
             return ("inspect", raw_tgt, None)
 
+        # Profiles catalog
+        if lower in (
+            "profiles", "list profiles", "show profiles", "get profiles", "capability profiles"
+        ):
+            return ("profiles", None, None)
+
+        # Profile / Reverse-engineering commands
+        m_profile = re.match(r"^(?:reverse[\s\-_]*engineer|profile|analyze|learn)\s+(?:app\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        if m_profile:
+            raw_tgt = m_profile.group(1).strip()
+            if not raw_tgt or raw_tgt.lower() in ("this app", "the app", "active app", "active", "screen", "current", "this"):
+                return ("profile", "active", None)
+            return ("profile", raw_tgt, None)
+        elif lower in ("reverse engineer", "reverse-engineer", "profile", "analyze app", "reverse engineer app", "reverse engineer this app"):
+            return ("profile", "active", None)
+
+        # Profile-driven semantic workflow (e.g. "In Dokonchi, click the login button, enter user X, and submit")
+        m_in_app = re.match(r"^in\s+([a-zA-Z0-9_\-\.\s]+?)[,:]\s+(.+)$", clean, flags=re.IGNORECASE)
+        if m_in_app:
+            app_target = m_in_app.group(1).strip()
+            raw_steps = m_in_app.group(2).strip()
+            raw_tokens = re.split(r",\s*(?:and\s+)?|\s+and\s+|;\s*", raw_steps)
+            steps_list = [re.sub(r"^and\s+", "", s.strip(), flags=re.IGNORECASE) for s in raw_tokens if s.strip()]
+            return ("profile_action", app_target, steps_list)
+
         # Register / Teach custom application command
         m_reg = re.match(r"^(?:register|teach|add)\s+(?:app\s+)?(.+?)\s+(?:at|path|from)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m_reg:
@@ -193,6 +218,9 @@ class NLPRouter:
                     "  - Momento, open <app_name>   (e.g., Momento, open notepad)\n"
                     "  - Momento, run <app_name>    (e.g., Momento, run calc)\n"
                     "  - open <app> and type <text> (e.g., open notepad and type Hello)\n"
+                    "  - reverse engineer <app>     (deep UI traversal and capability profiler)\n"
+                    "  - in <app>, click <control>  (execute profile semantic action)\n"
+                    "  - profiles                   (list discovered app capability profiles)\n"
                     "  - register app <name> at <path> (e.g., register app MyApp at C:\\path\\app.exe)\n"
                     "  - sessions                   (list active sandbox sessions)\n"
                     "  - inspect <session_id>       (view telemetry & metrics)\n"
@@ -227,6 +255,110 @@ class NLPRouter:
                 "action": "register",
                 "app": rec,
                 "message": msg
+            }
+
+        if action == "profiles":
+            from client.app_profiler import list_profiles
+            profs = list_profiles()
+            if not profs:
+                return {
+                    "success": True,
+                    "action": "profiles",
+                    "total_profiles": 0,
+                    "profiles": [],
+                    "message": "Momento: No application capability profiles discovered yet. Use 'reverse engineer <app>' to profile an application."
+                }
+            lines = [f"Momento Capability Profiles ({len(profs)} discovered):"]
+            for p in profs:
+                name = p.get("app_name", "App")
+                controls_cnt = p.get("stats", {}).get("total_controls") or p.get("controls_count") or len(p.get("controls", []))
+                inter_cnt = p.get("stats", {}).get("interactive_controls") or p.get("interactive_controls", 0)
+                tags = p.get("semantic_tags", [])
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                lines.append(f"  - '{name}' ({controls_cnt} controls, {inter_cnt} interactive){tag_str}")
+            return {
+                "success": True,
+                "action": "profiles",
+                "total_profiles": len(profs),
+                "profiles": profs,
+                "message": "\n".join(lines)
+            }
+
+        if action == "profile":
+            from client.execution_engine import global_execution_engine
+            target_app = target if (target and target not in ("active", "current", "screen", "this", "this app")) else None
+            if not target_app:
+                # Find active foreground window title
+                from client.gui_automation import inspect_window_ui
+                fg = inspect_window_ui()
+                target_app = fg.get("title") or fg.get("process_name") or "Application"
+
+            prof_res = global_execution_engine.profile_app(target_app)
+            msg = prof_res.get("summary") or f"Application profiling completed for '{target_app}'."
+            return {
+                "success": prof_res.get("success", True),
+                "action": "profile",
+                "app_name": prof_res.get("app_name") or target_app,
+                "session_id": prof_res.get("session_id"),
+                "pid": prof_res.get("window", {}).get("pid"),
+                "profile": prof_res,
+                "logs": prof_res.get("logs", []),
+                "message": msg
+            }
+
+        if action == "profile_action" and target and args:
+            from client.app_profiler import execute_profile_semantic_action, load_profile
+            step_logs = []
+            overall_success = True
+
+            for step in args:
+                s_clean = step.strip()
+                if not s_clean:
+                    continue
+                m_click = re.match(r"^(?:click|press|push)\s+(?:the\s+)?(.+)$", s_clean, re.I)
+                m_type1 = re.match(r"^(?:enter|type|write|fill)\s+['\"]?([^'\"]+?)['\"]?\s+(?:in|into)\s+(?:the\s+)?(.+)$", s_clean, re.I)
+                m_type2 = re.match(r"^(?:enter|type|write|fill)\s+([a-zA-Z0-9_\-]+)\s+(.+)$", s_clean, re.I)
+
+                if m_click:
+                    act_type = "click"
+                    descriptor = m_click.group(1).strip()
+                    val = None
+                elif m_type1:
+                    act_type = "type"
+                    val = m_type1.group(1).strip()
+                    descriptor = m_type1.group(2).strip()
+                elif m_type2:
+                    act_type = "type"
+                    descriptor = m_type2.group(1).strip()
+                    val = m_type2.group(2).strip()
+                elif s_clean.lower() in ("submit", "and submit", "login"):
+                    act_type = "click"
+                    descriptor = "submit_button" if "submit" in s_clean.lower() else "login_button"
+                    val = None
+                else:
+                    act_type = "click"
+                    descriptor = s_clean
+                    val = None
+
+                res = execute_profile_semantic_action(
+                    app_name=target,
+                    action_type=act_type,
+                    target_descriptor=descriptor,
+                    param_value=val,
+                    log_callback=lambda m: step_logs.append(m)
+                )
+                if not res.get("success"):
+                    overall_success = False
+                    step_logs.append(f"[-] Step '{s_clean}' failed: {res.get('error')}")
+                else:
+                    step_logs.append(f"[+] Completed: '{s_clean}'")
+
+            return {
+                "success": overall_success,
+                "action": "profile_action",
+                "app_name": target,
+                "message": "\n".join(step_logs) if step_logs else f"Workflow executed for '{target}'.",
+                "logs": step_logs
             }
 
         if action == "sessions":
