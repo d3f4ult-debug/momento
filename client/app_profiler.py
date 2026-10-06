@@ -283,6 +283,9 @@ def infer_workflows_and_tags(controls: List[Dict[str, Any]]) -> Tuple[List[str],
 def profile_application(
     app_name_or_path: str,
     session_id: Optional[str] = None,
+    pid: Optional[int] = None,
+    hwnd: Optional[int] = None,
+    binary_path: Optional[str] = None,
     timeout: float = 8.0,
     max_depth: int = 8,
     max_controls: int = 150,
@@ -291,6 +294,7 @@ def profile_application(
     """
     Launch (or attach to) target application, deeply introspect its UI control tree,
     classify semantic roles, and persist an App Capability Profile in ~/.momento/profiles/<app>.json.
+    Supports targeting an exact PID or HWND directly from the visual target picker.
     """
     def _log(msg: str):
         logger.info(msg)
@@ -313,18 +317,29 @@ def profile_application(
 
     # 1. Resolve application
     app_record = None if is_active_intent else resolve_app_binary(target_clean)
-    binary_path = app_record["binary_path"] if app_record else target_clean
+    resolved_bin = binary_path or (app_record["binary_path"] if app_record else target_clean)
+    binary_path = resolved_bin
     app_name = app_record["name"] if app_record else (
         "Active Application" if is_active_intent else os.path.splitext(os.path.basename(target_clean))[0].title()
     )
     app_working_dir = app_record.get("working_dir") if app_record else None
     app_id = app_record["id"] if app_record else slugify_app_name(app_name)
 
-    # 2. Check if the app is already running on the desktop or if targeting active window
+    # 2. Check if the app is already running on the desktop or if targeting active window or direct PID/HWND
     running_win_found: Optional[Dict[str, Any]] = None
     all_active_windows = list_active_windows()
 
-    if is_active_intent:
+    if pid or hwnd:
+        _log(f"[*] Direct visual target selected (PID: {pid}, HWND: {hwnd}). Attaching directly...")
+        for w in all_active_windows:
+            if (pid and w.get("pid") == pid) or (hwnd and w.get("handle") == hwnd):
+                running_win_found = w
+                if w.get("title") and (not app_name or app_name in ("Active Application", "Custom App")):
+                    app_name = w["title"]
+                break
+        if not running_win_found:
+            running_win_found = {"pid": pid, "handle": hwnd, "title": app_name}
+    elif is_active_intent:
         _log("[*] Targeting active foreground window directly...")
         running_win_found = get_foreground_window_info()
     else:

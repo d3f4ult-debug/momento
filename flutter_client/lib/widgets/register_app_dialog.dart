@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import '../services/bridge_service.dart';
 import '../theme/app_theme.dart';
+import 'target_picker_drop_zone.dart';
 
 class RegisterAppDialog extends StatefulWidget {
+  final BridgeService bridgeService;
   final Future<bool> Function(
     String name,
     String binaryPath,
@@ -13,6 +16,7 @@ class RegisterAppDialog extends StatefulWidget {
 
   const RegisterAppDialog({
     super.key,
+    required this.bridgeService,
     required this.onRegister,
   });
 
@@ -39,6 +43,23 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
     _workingDirController.dispose();
     _argumentsController.dispose();
     super.dispose();
+  }
+
+  void _onTargetAutoFilled(Map<String, dynamic> meta) {
+    setState(() {
+      if (meta['name'] != null && meta['name'].toString().isNotEmpty) {
+        _nameController.text = meta['name'].toString();
+      }
+      if (meta['binary_path'] != null && meta['binary_path'].toString().isNotEmpty) {
+        _pathController.text = meta['binary_path'].toString();
+      }
+      if (meta['working_dir'] != null && meta['working_dir'].toString().isNotEmpty) {
+        _workingDirController.text = meta['working_dir'].toString();
+      }
+      if (meta['arguments'] != null && meta['arguments'].toString().isNotEmpty) {
+        _argumentsController.text = meta['arguments'].toString();
+      }
+    });
   }
 
   Future<void> _handleSubmit() async {
@@ -143,7 +164,20 @@ class _RegisterAppDialogState extends State<RegisterAppDialog> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+
+                TargetPickerDropZone(
+                  bridgeService: widget.bridgeService,
+                  onTargetResolved: _onTargetAutoFilled,
+                  onWindowSelected: (win) {
+                    _onTargetAutoFilled({
+                      'name': win.title,
+                      'binary_path': win.processPath,
+                      'working_dir': win.workingDir,
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
 
                 if (_errorMessage != null) ...[
                   Container(

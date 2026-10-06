@@ -62,5 +62,25 @@ void main() {
     expect(find.text('Reverse-Engineer & Profile App'), findsOneWidget);
     expect(find.text('Profile App'), findsOneWidget);
   });
+
+  testWidgets('TargetPickerDropZone renders visual drop zone and Pick Window button', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
+
+    final mockBridge = BridgeService();
+
+    await tester.pumpWidget(MomentoDesktopApp(bridgeService: mockBridge));
+    await tester.pump();
+
+    final teachButton = find.text('+ Teach Custom App');
+    await tester.tap(teachButton);
+    await tester.pumpAndSettle();
+
+    // Verify visual target picker elements inside RegisterAppDialog
+    expect(find.text('Visual Target Picker & Drop Zone'), findsOneWidget);
+    expect(find.text('Pick Window'), findsOneWidget);
+    expect(find.byIcon(Icons.gps_fixed_rounded), findsOneWidget);
+  });
 }
 

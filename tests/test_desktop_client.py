@@ -613,4 +613,46 @@ def test_app_profiler_folder_shortcut_and_active_fallback(tmp_path):
         delete_profile("Active Application")
 
 
+def test_target_picker_metadata_resolution():
+    """Verify resolve_target_metadata extracts binary, working dir, and executable name."""
+    from client.scanner import resolve_target_metadata
+    import sys
 
+    # Valid executable
+    res = resolve_target_metadata(sys.executable)
+    assert res["success"] is True
+    assert res["binary_path"] == sys.executable
+    assert res["exists"] is True
+    assert len(res["name"]) > 0
+
+    # Quoted path
+    res_quoted = resolve_target_metadata(f'"{sys.executable}"')
+    assert res_quoted["success"] is True
+    assert res_quoted["binary_path"] == sys.executable
+
+    # Empty target
+    res_empty = resolve_target_metadata("")
+    assert res_empty["success"] is False
+
+
+def test_profile_application_direct_pid_binding():
+    """Verify profile_application attaches directly when explicit PID or HWND is specified."""
+    from client.app_profiler import delete_profile, profile_application
+    import sys
+
+    logs = []
+    def _cb(line):
+        logs.append(line)
+
+    try:
+        prof = profile_application(
+            "Test Picker Window",
+            pid=os.getpid(),
+            hwnd=123456,
+            binary_path=sys.executable,
+            log_callback=_cb
+        )
+        assert prof["success"] is True
+        assert any("Direct visual target selected" in line for line in logs)
+    finally:
+        delete_profile("Test Picker Window")

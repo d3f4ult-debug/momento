@@ -285,10 +285,18 @@ class ExecutionEngine:
 
         return inspection
 
-    def profile_app(self, app_name_or_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def profile_app(
+        self,
+        app_name_or_path: str,
+        session_id: Optional[str] = None,
+        pid: Optional[int] = None,
+        hwnd: Optional[int] = None,
+        binary_path: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Deep reverse-engineer and profile target application.
         Appends live reverse-engineering log lines into session logs for streaming to live cards.
+        Supports direct targeting via PID, HWND, and binary path.
         """
         from client.app_profiler import profile_application
 
@@ -303,6 +311,9 @@ class ExecutionEngine:
         profile = profile_application(
             app_name_or_path=app_name_or_path,
             session_id=session_id,
+            pid=pid,
+            hwnd=hwnd,
+            binary_path=binary_path,
             log_callback=_stream
         )
 

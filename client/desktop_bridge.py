@@ -475,6 +475,11 @@ class DesktopAppBridge:
             return self.execution_engine.inspect_session(session_id=target)
         return inspect_window_ui(target=target)
 
+    def resolve_target(self, path: str) -> Dict[str, Any]:
+        """Resolve a dropped or pasted target path, shortcut, or folder into full executable metadata."""
+        from client.scanner import resolve_target_metadata
+        return resolve_target_metadata(path)
+
     def list_windows(self) -> List[Dict[str, Any]]:
         """List active visible top-level windows on desktop."""
         from client.gui_automation import list_active_windows
@@ -490,7 +495,18 @@ class DesktopAppBridge:
         from client.app_profiler import load_profile
         return load_profile(app_name)
 
-    def profile_app(self, app_name: str) -> Dict[str, Any]:
+    def profile_app(
+        self,
+        app_name: str,
+        pid: Optional[int] = None,
+        hwnd: Optional[int] = None,
+        binary_path: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Deep reverse-engineer application and generate capability profile."""
-        return self.execution_engine.profile_app(app_name)
+        return self.execution_engine.profile_app(
+            app_name,
+            pid=pid,
+            hwnd=hwnd,
+            binary_path=binary_path
+        )
 

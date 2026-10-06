@@ -290,11 +290,13 @@ def list_active_windows() -> List[Dict[str, Any]]:
                             "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
                             "width": width, "height": height
                         }
+                        working_dir = os.path.dirname(proc_info["path"]) if proc_info["path"] else ""
                         windows_found.append({
                             "title": title,
                             "pid": pid,
                             "process_name": proc_info["name"],
                             "process_path": proc_info["path"],
+                            "working_dir": working_dir,
                             "handle": hwnd,
                             "rect": rect_dict,
                             "class_name": w.class_name()
@@ -329,11 +331,13 @@ def list_active_windows() -> List[Dict[str, Any]]:
                             ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
                             pid = pid_val.value
                             proc_info = get_process_info_by_pid(pid)
+                        working_dir = os.path.dirname(proc_info["path"]) if proc_info["path"] else ""
                         windows_found.append({
                             "title": w.title.strip(),
                             "pid": pid,
                             "process_name": proc_info["name"],
                             "process_path": proc_info["path"],
+                            "working_dir": working_dir,
                             "handle": hwnd,
                             "rect": rect_dict,
                             "class_name": ""
@@ -383,11 +387,14 @@ def get_foreground_window_info() -> Optional[Dict[str, Any]]:
             "width": rect.right - rect.left, "height": rect.bottom - rect.top
         }
 
+        working_dir = os.path.dirname(proc_info["path"]) if proc_info["path"] else ""
+
         return {
             "title": title,
             "pid": pid,
             "process_name": proc_info["name"],
             "process_path": proc_info["path"],
+            "working_dir": working_dir,
             "handle": hwnd,
             "rect": rect_dict,
             "class_name": class_name

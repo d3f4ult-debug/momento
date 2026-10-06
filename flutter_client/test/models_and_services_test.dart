@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:momento_desktop/models/app_info.dart';
 import 'package:momento_desktop/models/chat_message.dart';
 import 'package:momento_desktop/models/session_info.dart';
+import 'package:momento_desktop/models/window_target.dart';
 import 'package:momento_desktop/services/bridge_service.dart';
 
 void main() {
@@ -68,6 +69,30 @@ void main() {
       expect(msg.sender, MessageSender.momento);
       expect(msg.executionResult?.pid, 1234);
       expect(msg.executionResult?.logs.length, 2);
+    });
+
+    test('WindowTarget fromJson and toJson', () {
+      final json = {
+        'title': 'Dokonchi Client',
+        'pid': 5678,
+        'process_name': 'dokonchi.exe',
+        'process_path': r'C:\Games\Dokonchi\dokonchi.exe',
+        'working_dir': r'C:\Games\Dokonchi',
+        'handle': 123456,
+        'class_name': 'DokonchiMain',
+        'rect': {'left': 100, 'top': 100, 'width': 800, 'height': 600},
+      };
+
+      final target = WindowTarget.fromJson(json);
+      expect(target.title, 'Dokonchi Client');
+      expect(target.pid, 5678);
+      expect(target.processName, 'dokonchi.exe');
+      expect(target.workingDir, r'C:\Games\Dokonchi');
+      expect(target.handle, 123456);
+
+      final back = target.toJson();
+      expect(back['title'], 'Dokonchi Client');
+      expect(back['pid'], 5678);
     });
   });
 

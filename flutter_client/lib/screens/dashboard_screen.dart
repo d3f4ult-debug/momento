@@ -10,6 +10,7 @@ import '../widgets/onboarding_dialog.dart';
 import '../widgets/register_app_dialog.dart';
 import '../widgets/settings_dialog.dart';
 import '../widgets/sidebar.dart';
+import '../widgets/target_picker_drop_zone.dart';
 
 class DashboardScreen extends StatefulWidget {
   final BridgeService bridgeService;
@@ -296,6 +297,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (context) {
         return RegisterAppDialog(
+          bridgeService: widget.bridgeService,
           onRegister: (name, binaryPath, aliases, category, workingDir, arguments) async {
             final res = await widget.bridgeService.registerApp(
               name: name,
@@ -320,81 +322,171 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _showProfileAppDialog() async {
     final controller = TextEditingController();
-    final target = await showDialog<String>(
+    int? targetPid;
+    int? targetHwnd;
+    String? targetBinPath;
+
+    final shouldProfile = await showDialog<bool>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppTheme.bgSurface,
-          title: const Row(
-            children: [
-              Icon(Icons.psychology_outlined, color: Color(0xFF10B981), size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Reverse-Engineer & Profile App',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textMain),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppTheme.bgSurface,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: AppTheme.borderColor),
               ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Deeply traverse UI controls, map interactive elements, and build a semantic capability profile for natural-language automation.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              title: const Row(
+                children: [
+                  Icon(Icons.psychology_outlined, color: Color(0xFF10B981), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Reverse-Engineer & Profile App',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textMain),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                style: const TextStyle(fontSize: 13, color: AppTheme.textMain),
-                decoration: InputDecoration(
-                  labelText: 'Application Name or "active"',
-                  hintText: 'e.g. notepad, calc, or Dokonchi',
-                  labelStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                  hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                  filled: true,
-                  fillColor: AppTheme.bgDark,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: AppTheme.borderColor),
+              content: SizedBox(
+                width: 480,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Deeply traverse UI controls, map interactive elements, and build a semantic capability profile for natural-language automation.',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      ),
+                      const SizedBox(height: 14),
+                      TargetPickerDropZone(
+                        bridgeService: widget.bridgeService,
+                        onWindowSelected: (win) {
+                          setDialogState(() {
+                            targetPid = win.pid;
+                            targetHwnd = win.handle;
+                            targetBinPath = win.processPath;
+                            controller.text = win.title.isNotEmpty ? win.title : win.processName;
+                          });
+                        },
+                        onTargetResolved: (meta) {
+                          setDialogState(() {
+                            if (meta['pid'] != null) targetPid = meta['pid'] as int;
+                            if (meta['handle'] != null) targetHwnd = meta['handle'] as int;
+                            if (meta['binary_path'] != null) targetBinPath = meta['binary_path'].toString();
+                            if (meta['name'] != null && meta['name'].toString().isNotEmpty) {
+                              controller.text = meta['name'].toString();
+                            }
+                          });
+                        },
+                        onDirectProfileRequested: (win) {
+                          targetPid = win.pid;
+                          targetHwnd = win.handle;
+                          targetBinPath = win.processPath;
+                          controller.text = win.title.isNotEmpty ? win.title : win.processName;
+                          Navigator.pop(context, true);
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: controller,
+                        style: const TextStyle(fontSize: 13, color: AppTheme.textMain),
+                        decoration: InputDecoration(
+                          labelText: 'Application Name, Process, or "active"',
+                          hintText: 'e.g. Dokonchi, notepad, or click Pick Window above',
+                          labelStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          filled: true,
+                          fillColor: AppTheme.bgDark,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: AppTheme.borderColor),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                onSubmitted: (val) {
-                  if (val.trim().isNotEmpty) {
-                    Navigator.pop(context, val.trim());
-                  }
-                },
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                final text = controller.text.trim();
-                if (text.isNotEmpty) {
-                  Navigator.pop(context, text);
-                }
-              },
-              icon: const Icon(Icons.flash_on, size: 14),
-              label: const Text('Profile App', style: TextStyle(fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF10B981),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (controller.text.trim().isNotEmpty || targetPid != null) {
+                      Navigator.pop(context, true);
+                    }
+                  },
+                  icon: const Icon(Icons.flash_on, size: 14),
+                  label: const Text('Profile App', style: TextStyle(fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
 
-    if (target != null && target.isNotEmpty && mounted) {
-      _handleSendMessage('Momento, reverse engineer $target');
+    if (shouldProfile == true && mounted) {
+      final name = controller.text.trim();
+      final targetDesc = name.isNotEmpty ? name : 'Target App (PID: $targetPid)';
+
+      setState(() => _isSending = true);
+      _addUserMessage('Momento, reverse engineer $targetDesc');
+
+      try {
+        final res = await widget.bridgeService.profileApp(
+          name.isNotEmpty ? name : 'Target App',
+          pid: targetPid,
+          hwnd: targetHwnd,
+          binaryPath: targetBinPath,
+        );
+
+        if (mounted) {
+          final isSuccess = res['success'] == true;
+          final rawLogs = res['logs'];
+          final initialLogs = rawLogs is List
+              ? rawLogs.map((e) => e.toString()).toList()
+              : <String>[];
+          final rawPid = res['pid'] ?? targetPid;
+          final pid = rawPid is int ? rawPid : int.tryParse(rawPid?.toString() ?? '0') ?? 0;
+
+          final execResult = ExecutionResult(
+            success: isSuccess,
+            sessionId: res['session_id']?.toString() ?? '',
+            appName: res['app_name']?.toString() ?? targetDesc,
+            binaryPath: res['binary_path']?.toString() ?? (targetBinPath ?? ''),
+            pid: pid,
+            runtime: res['runtime']?.toString() ?? 'local_native',
+            status: isSuccess ? 'profiled' : 'failed',
+            logs: initialLogs,
+          );
+
+          _addMomentoMessage(
+            res['message']?.toString() ??
+                (isSuccess
+                    ? 'Successfully profiled ${execResult.appName} with ${res['total_controls'] ?? 0} interactive controls.'
+                    : 'Failed to profile application: ${res['error']}'),
+            result: isSuccess ? execResult : null,
+          );
+          _pollActiveSessions();
+        }
+      } catch (e) {
+        if (mounted) {
+          _addMomentoMessage('Failed to profile target: $e');
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isSending = false);
+        }
+      }
     }
   }
 

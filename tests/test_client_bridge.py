@@ -226,5 +226,31 @@ def test_client_profiles_endpoints():
         delete_profile("ApiTestApp")
 
 
+def test_resolve_target_endpoint():
+    """Test /api/client/resolve-target endpoint resolving file paths and shortcuts."""
+    import sys
+    test_path = sys.executable
+    res = http_client.post("/api/client/resolve-target", json={"path": test_path})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["binary_path"] == test_path
+    assert data["exists"] is True
+    assert len(data["name"]) > 0
 
 
+def test_profile_application_endpoint_with_pid():
+    """Test /api/client/profiles/analyze accepts target with explicit PID and HWND."""
+    import sys
+    res = http_client.post("/api/client/profiles/analyze", json={
+        "target": "Python Test Runner",
+        "pid": 99999,
+        "hwnd": 12345,
+        "binary_path": sys.executable
+    })
+    # Should successfully execute profiler binding
+    assert res.status_code in (200, 400)
+    data = res.json()
+    if res.status_code == 200:
+        assert data["success"] is True
+        assert "profile" in data

@@ -177,14 +177,34 @@ async def list_profiles_endpoint():
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
+@client_router.post("/resolve-target")
+async def resolve_target_endpoint(payload: Dict[str, Any] = Body(default={})):
+    """Resolve dropped or pasted file path, shortcut, or directory to target metadata."""
+    path = payload.get("path") or payload.get("target") or ""
+    try:
+        res = _bridge_instance.resolve_target(path)
+        status_code = 200 if res.get("success", False) else 400
+        return JSONResponse(status_code=status_code, content=res)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
 @client_router.post("/profiles/analyze")
 async def profile_application_endpoint(payload: Dict[str, Any] = Body(default={})):
     """Deep reverse-engineer application and generate capability profile."""
-    target = payload.get("target") or payload.get("app_name")
-    if not target:
-        return JSONResponse(status_code=400, content={"success": False, "error": "'target' or 'app_name' required."})
+    target = payload.get("target") or payload.get("app_name") or ""
+    pid = payload.get("pid")
+    hwnd = payload.get("hwnd") or payload.get("handle")
+    binary_path = payload.get("binary_path")
+    if not target and not pid and not hwnd:
+        return JSONResponse(status_code=400, content={"success": False, "error": "'target', 'app_name', or 'pid' required."})
     try:
-        res = _bridge_instance.profile_app(target)
+        res = _bridge_instance.profile_app(
+            target or "Custom App",
+            pid=pid,
+            hwnd=hwnd,
+            binary_path=binary_path
+        )
         status_code = 200 if res.get("success", True) else 400
         return JSONResponse(status_code=status_code, content={"success": True, "profile": res, **res})
     except Exception as e:

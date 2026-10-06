@@ -674,16 +674,102 @@ class BridgeService {
     return [];
   }
 
-  /// Trigger deep reverse-engineering / capability profiling for an application
-  Future<Map<String, dynamic>> profileApp(String appName) async {
+  /// List active desktop application windows
+  Future<List<Map<String, dynamic>>> listWindows() async {
     final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/windows'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 4));
+
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final wins = data['windows'] as List? ?? [];
+          return wins.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+
+    // Direct Python fallback
+    try {
+      final py = await getPythonExecutable();
+      final script = "import json; from client.gui_automation import list_active_windows; print(json.dumps(list_active_windows()))";
+      final proc = await runPythonProcess(py, ['-c', script]);
+      final out = proc.stdout.toString().trim();
+      if (out.isNotEmpty) {
+        final data = jsonDecode(out) as List;
+        return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+
+    return [];
+  }
+
+  /// Resolve a dropped/pasted target file path or shortcut into full executable metadata
+  Future<Map<String, dynamic>> resolveTarget(String path) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/resolve-target'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'path': path}),
+        ).timeout(const Duration(seconds: 4));
+
+        if (res.statusCode == 200) {
+          return jsonDecode(res.body) as Map<String, dynamic>;
+        }
+      } catch (_) {}
+    }
+
+    // Direct Python fallback
+    try {
+      final py = await getPythonExecutable();
+      final script = "import json, sys; from client.scanner import resolve_target_metadata; print(json.dumps(resolve_target_metadata(sys.argv[1])))";
+      final proc = await runPythonProcess(py, ['-c', script, path]);
+      final out = proc.stdout.toString().trim();
+      if (out.isNotEmpty) {
+        return jsonDecode(out) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+
+    return {
+      'success': false,
+      'error': 'Failed to resolve target path',
+      'name': '',
+      'binary_path': path,
+      'working_dir': '',
+      'arguments': '',
+      'exists': false,
+    };
+  }
+
+  /// Trigger deep reverse-engineering / capability profiling for an application
+  Future<Map<String, dynamic>> profileApp(
+    String appName, {
+    int? pid,
+    int? hwnd,
+    String? binaryPath,
+  }) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+
+    final payload = <String, dynamic>{
+      'target': appName,
+      if (pid != null) 'pid': pid,
+      if (hwnd != null) 'hwnd': hwnd,
+      if (binaryPath != null) 'binary_path': binaryPath,
+    };
 
     for (final url in urls) {
       try {
         final res = await http.post(
           Uri.parse('$url/api/client/profiles/analyze'),
           headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-          body: jsonEncode({'target': appName}),
+          body: jsonEncode(payload),
         ).timeout(const Duration(seconds: 15));
 
         if (res.statusCode == 200) {
@@ -691,6 +777,26 @@ class BridgeService {
         }
       } catch (_) {}
     }
+
+    // Direct Python fallback
+    try {
+      final py = await getPythonExecutable();
+      final script = "import json, sys; from client.app_profiler import profile_application; "
+          "res = profile_application(sys.argv[1], pid=int(sys.argv[2]) if sys.argv[2]!='0' else None, hwnd=int(sys.argv[3]) if sys.argv[3]!='0' else None, binary_path=sys.argv[4] if sys.argv[4]!='' else None); "
+          "print(json.dumps(res))";
+      final proc = await runPythonProcess(py, [
+        '-c',
+        script,
+        appName,
+        (pid ?? 0).toString(),
+        (hwnd ?? 0).toString(),
+        binaryPath ?? ''
+      ]);
+      final out = proc.stdout.toString().trim();
+      if (out.isNotEmpty) {
+        return jsonDecode(out) as Map<String, dynamic>;
+      }
+    } catch (_) {}
 
     // Fallback to sending chat command
     return sendMessage('reverse engineer $appName');

@@ -289,6 +289,65 @@ def resolve_shortcut_or_target(
     return os.path.normpath(clean_path), resolved_cwd, arg_list
 
 
+def resolve_target_metadata(raw_path: str) -> Dict[str, Any]:
+    """
+    Resolve dropped or pasted target path (or shortcut / directory) into complete metadata:
+    target binary path, working directory, arguments, app name, and running process info if matched.
+    """
+    clean_target = (raw_path or "").strip()
+    if clean_target.startswith('"') and clean_target.endswith('"'):
+        clean_target = clean_target[1:-1]
+    elif clean_target.startswith("'") and clean_target.endswith("'"):
+        clean_target = clean_target[1:-1]
+
+    if not clean_target:
+        return {
+            "success": False,
+            "error": "Target path cannot be empty",
+            "name": "",
+            "binary_path": "",
+            "working_dir": "",
+            "arguments": "",
+            "exists": False
+        }
+
+    bin_path, cwd, args_list = resolve_shortcut_or_target(clean_target)
+    exists = os.path.exists(bin_path)
+
+    # Derive app name
+    base_stem = os.path.splitext(os.path.basename(bin_path))[0]
+    app_name = base_stem.replace("-", " ").replace("_", " ").title() if base_stem else "Custom App"
+
+    # Check if this binary is already running
+    matched_win = None
+    from client.gui_automation import list_active_windows
+    try:
+        active_wins = list_active_windows()
+        bin_norm = os.path.normpath(bin_path).lower()
+        base_name = os.path.basename(bin_path).lower()
+        for w in active_wins:
+            p_path = (w.get("process_path") or "").lower()
+            p_name = (w.get("process_name") or "").lower()
+            if (p_path and p_path == bin_norm) or (p_name and p_name == base_name):
+                matched_win = w
+                break
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "name": app_name,
+        "binary_path": bin_path,
+        "working_dir": cwd or "",
+        "arguments": " ".join(args_list) if args_list else "",
+        "exists": exists,
+        "pid": matched_win.get("pid") if matched_win else None,
+        "handle": matched_win.get("handle") if matched_win else None,
+        "window_title": matched_win.get("title") if matched_win else "",
+        "process_name": matched_win.get("process_name") if matched_win else ""
+    }
+
+
 class AppScanner:
     """Discovers and catalogs installed software and system tools."""
 
