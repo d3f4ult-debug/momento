@@ -223,7 +223,7 @@ class DesktopAppBridge:
                 }
 
         # 1. Handle non-launch commands
-        if action in ("sessions", "stop", "inspect", "scan", "help"):
+        if action in ("sessions", "stop", "inspect", "list_windows", "scan", "help"):
             # For sessions, combine local sessions and remote VPS sessions
             if action == "sessions":
                 local_sess = self.execution_engine.list_sessions()
@@ -247,6 +247,48 @@ class DesktopAppBridge:
                     return {"success": res.get("success", False), "action": "stop", "session_id": target, "message": msg}
                 else:
                     return self.nlp_router.execute(f"stop {target}")
+
+            if action == "inspect":
+                if target and target.startswith("sbx_vps_"):
+                    return self.nlp_router.execute(clean_text)
+
+                is_contextual = (not target) or target in ("active", "current", "screen", "window", "the app", "app")
+                if is_contextual or (target and target.startswith("sbx_local_")):
+                    sess_id = target if (target and target.startswith("sbx_local_")) else None
+                    insp_res = self.execution_engine.inspect_session(session_id=sess_id)
+                else:
+                    found_sess = None
+                    with self.execution_engine._lock:
+                        for s in reversed(list(self.execution_engine._sessions.values())):
+                            if s.app_name.lower() == target.lower():
+                                found_sess = s
+                                break
+                    if found_sess:
+                        insp_res = self.execution_engine.inspect_session(session_id=found_sess.session_id)
+                    else:
+                        from client.gui_automation import inspect_window_ui
+                        insp_res = inspect_window_ui(target=target)
+
+                sess_id = insp_res.get("session_id")
+                app_name = insp_res.get("app_name") or insp_res.get("title") or target or "Application"
+                pid = insp_res.get("pid")
+                logs = insp_res.get("logs") or insp_res.get("log_lines", [])
+                msg = insp_res.get("summary") or "Inspection completed."
+                return {
+                    "success": insp_res.get("success", False),
+                    "action": "inspect",
+                    "app_name": app_name,
+                    "session_id": sess_id,
+                    "pid": pid,
+                    "runtime": "local_native",
+                    "status": "running" if pid else "completed",
+                    "message": msg,
+                    "logs": logs,
+                    "inspection": insp_res
+                }
+
+            if action == "list_windows":
+                return self.nlp_router.execute(clean_text)
 
             if action == "scan":
                 return self.rescan_apps()
@@ -391,3 +433,18 @@ class DesktopAppBridge:
         cfg["execution_mode"] = execution_mode
         save_config(cfg)
         return {"success": True, "backend_url": clean_url, "execution_mode": execution_mode}
+
+    def inspect_ui(self, target: Optional[str] = None) -> Dict[str, Any]:
+        """Introspect active application window, UI controls, and live telemetry."""
+        from client.gui_automation import inspect_window_ui
+        if not target or target in ("active", "current", "screen", "window", "the app", "app"):
+            return self.execution_engine.inspect_session()
+        if target.startswith("sbx_local_"):
+            return self.execution_engine.inspect_session(session_id=target)
+        return inspect_window_ui(target=target)
+
+    def list_windows(self) -> List[Dict[str, Any]]:
+        """List active visible top-level windows on desktop."""
+        from client.gui_automation import list_active_windows
+        return list_active_windows()
+

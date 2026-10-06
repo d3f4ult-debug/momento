@@ -145,6 +145,29 @@ async def save_settings_endpoint(payload: Dict[str, Any] = Body(...)):
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
+@client_router.get("/windows")
+async def list_windows_endpoint():
+    """Enumerate active visible desktop application windows."""
+    try:
+        windows = _bridge_instance.list_windows()
+        return JSONResponse(status_code=200, content={"success": True, "total_windows": len(windows), "windows": windows})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@client_router.post("/inspect")
+async def inspect_ui_endpoint(payload: Dict[str, Any] = Body(default={})):
+    """Introspect active or target application window and UI tree."""
+    target = payload.get("target") or payload.get("app_name") or payload.get("session_id")
+    try:
+        res = _bridge_instance.inspect_ui(target=target)
+        status_code = 200 if res.get("success", False) else 400
+        return JSONResponse(status_code=status_code, content=res)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+
 def create_standalone_bridge_app() -> FastAPI:
     """Create a lightweight standalone FastAPI app containing only client routes."""
     app = FastAPI(title="Momento Client Bridge API", version="1.0.0")

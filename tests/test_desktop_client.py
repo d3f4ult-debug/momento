@@ -363,3 +363,83 @@ def test_custom_app_registration_with_data_files(temp_bridge, tmp_path):
     assert app["default_args"] == ["--config", str(config_file)]
     assert app["data_file_path"] == str(config_file)
 
+
+def test_nlp_router_contextual_inspection_intents():
+    """Verify recognition of contextual inspection and window listing phrases."""
+    from client.nlp_router import NLPRouter
+    router = NLPRouter()
+
+    # Contextual screen & app inspection phrases
+    assert router.parse_command("inspect the app") == ("inspect", "active", None)
+    assert router.parse_command("Momento, what is on screen") == ("inspect", "active", None)
+    assert router.parse_command("what's on screen") == ("inspect", "active", None)
+    assert router.parse_command("inspect active session") == ("inspect", "active", None)
+    assert router.parse_command("inspect screen") == ("inspect", "active", None)
+    assert router.parse_command("inspect foreground window") == ("inspect", "active", None)
+    assert router.parse_command("inspect ui") == ("inspect", "active", None)
+
+    # Window listing phrases
+    assert router.parse_command("list active windows") == ("list_windows", None, None)
+    assert router.parse_command("show active windows") == ("list_windows", None, None)
+    assert router.parse_command("windows") == ("list_windows", None, None)
+
+    # Explicit target app or session ID
+    assert router.parse_command("inspect notepad") == ("inspect", "notepad", None)
+    assert router.parse_command("inspect sbx_local_12345") == ("inspect", "sbx_local_12345", None)
+
+
+def test_ui_introspection_structure():
+    """Verify inspect_window_ui and list_active_windows return structured payloads."""
+    from client.gui_automation import inspect_window_ui, list_active_windows
+
+    # Active windows list
+    windows = list_active_windows()
+    assert isinstance(windows, list)
+
+    # UI inspection output contract
+    res = inspect_window_ui()
+    assert "success" in res
+    assert "log_lines" in res
+    assert isinstance(res["log_lines"], list)
+    assert any("[*]" in line or "[-]" in line or "[+]" in line for line in res["log_lines"])
+    assert "summary" in res
+    assert "controls" in res
+    assert "visible_texts" in res
+
+
+def test_execution_engine_inspect_session(temp_engine):
+    """Verify ExecutionEngine inspect_session retrieves active session and streams log lines."""
+    # Launch short python process
+    launch_res = temp_engine.launch(
+        sys.executable,
+        args=["-c", "import time; print('READY', flush=True); time.sleep(1)"],
+        app_name="MockInspectorApp"
+    )
+    assert launch_res["success"] is True
+    session_id = launch_res["session_id"]
+
+    # Contextual session inspection
+    insp_res = temp_engine.inspect_session(session_id)
+    assert insp_res["session_id"] == session_id
+    assert insp_res["app_name"] == "MockInspectorApp"
+    assert "log_lines" in insp_res
+    assert len(insp_res["logs"]) >= 1
+
+    temp_engine.stop_session(session_id, force=True)
+
+
+def test_desktop_bridge_inspection_messaging(temp_bridge):
+    """Verify DesktopAppBridge handles conversational inspection requests."""
+    # Contextual screen inspection
+    res_inspect = temp_bridge.send_message("what is on screen")
+    assert res_inspect["action"] == "inspect"
+    assert "message" in res_inspect
+    assert "logs" in res_inspect
+
+    # List active windows
+    res_windows = temp_bridge.send_message("list active windows")
+    assert res_windows["action"] == "list_windows"
+    assert "message" in res_windows
+    assert "windows" in res_windows
+
+

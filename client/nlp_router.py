@@ -91,15 +91,42 @@ class NLPRouter:
         if lower in ("help", "?", "commands"):
             return ("help", None, None)
 
+        # Check for listing active windows
+        if lower in (
+            "list active windows", "list windows", "show active windows",
+            "show windows", "active windows", "get windows", "windows"
+        ):
+            return ("list_windows", None, None)
+
+        # Check for contextual screen / UI inspection commands
+        if lower in (
+            "what is on screen", "what's on screen", "whats on screen",
+            "what is on the screen", "what's on the screen", "whats on the screen",
+            "inspect the app", "inspect app", "inspect active app",
+            "inspect active session", "inspect active window", "inspect the window",
+            "inspect window", "inspect screen", "inspect the screen",
+            "inspect foreground window", "inspect foreground", "inspect ui",
+            "inspect active", "inspect current window", "inspect this app",
+            "what is running", "what's running", "whats running", "inspect"
+        ):
+            return ("inspect", "active", None)
+
         # Stop / kill command
         m_stop = re.match(r"^(?:stop|kill|terminate|close)\s+([a-zA-Z0-9_\-\.]+)", clean, flags=re.IGNORECASE)
         if m_stop:
             return ("stop", m_stop.group(1).strip(), None)
 
-        # Inspect / status command
-        m_inspect = re.match(r"^(?:inspect|status|info)\s+([a-zA-Z0-9_\-\.]+)", clean, flags=re.IGNORECASE)
+        # Inspect / status command (e.g. "inspect notepad", "inspect sbx_local_...", "inspect active")
+        m_inspect = re.match(r"^(?:inspect|status|info)\s*(.*)$", clean, flags=re.IGNORECASE)
         if m_inspect:
-            return ("inspect", m_inspect.group(1).strip(), None)
+            raw_tgt = m_inspect.group(1).strip()
+            if not raw_tgt or raw_tgt.lower() in (
+                "the app", "app", "active app", "active session", "active window",
+                "window", "the window", "screen", "the screen", "ui", "foreground",
+                "current window", "active", "foreground window", "this app", "this"
+            ):
+                return ("inspect", "active", None)
+            return ("inspect", raw_tgt, None)
 
         # Register / Teach custom application command
         m_reg = re.match(r"^(?:register|teach|add)\s+(?:app\s+)?(.+?)\s+(?:at|path|from)\s+(.+)$", clean, flags=re.IGNORECASE)
@@ -252,25 +279,81 @@ class NLPRouter:
                 "message": f"Failed to stop session '{target}': {res.get('error', 'Unknown error')}"
             }
 
-        if action == "inspect":
-            res = make_backend_request(
-                "/api/sandbox/inspect",
-                method="POST",
-                data={"session_id": target},
-                backend_url=self.backend_url
-            )
-            if res.get("success"):
-                status = res.get("status")
-                pid = res.get("pid")
-                runtime = res.get("runtime")
-                uptime = res.get("uptime_seconds", 0)
-                msg = f"Session '{target}': Status={status}, PID={pid}, Runtime={runtime}, Uptime={uptime:.1f}s"
-                return {"success": True, "action": "inspect", "session_id": target, "message": msg, "data": res}
+        if action == "list_windows":
+            from client.gui_automation import list_active_windows
+            windows = list_active_windows()
+            if not windows:
+                return {
+                    "success": True,
+                    "action": "list_windows",
+                    "total_windows": 0,
+                    "windows": [],
+                    "message": "Momento: No visible top-level application windows detected on screen."
+                }
+            lines = [f"Momento Active Windows ({len(windows)} detected):"]
+            for w in windows:
+                rect = w.get("rect", {})
+                w_str = f" ({rect.get('width')}x{rect.get('height')})" if rect.get("width") else ""
+                lines.append(f"  - [PID {w.get('pid')}] '{w.get('title')}' ({w.get('process_name')}){w_str}")
             return {
-                "success": False,
+                "success": True,
+                "action": "list_windows",
+                "total_windows": len(windows),
+                "windows": windows,
+                "message": "\n".join(lines)
+            }
+
+        if action == "inspect":
+            if target and target.startswith("sbx_vps_"):
+                res = make_backend_request(
+                    "/api/sandbox/inspect",
+                    method="POST",
+                    data={"session_id": target},
+                    backend_url=self.backend_url
+                )
+                if res.get("success"):
+                    status = res.get("status")
+                    pid = res.get("pid")
+                    runtime = res.get("runtime")
+                    uptime = res.get("uptime_seconds", 0)
+                    msg = f"Session '{target}': Status={status}, PID={pid}, Runtime={runtime}, Uptime={uptime:.1f}s"
+                    return {"success": True, "action": "inspect", "session_id": target, "message": msg, "data": res}
+                return {
+                    "success": False,
+                    "action": "inspect",
+                    "session_id": target,
+                    "message": f"Inspection failed for '{target}': {res.get('error', 'Unknown error')}"
+                }
+
+            from client.execution_engine import global_execution_engine
+            from client.gui_automation import inspect_window_ui
+
+            is_contextual = (not target) or target in ("active", "current", "screen", "window", "the app", "app")
+            if is_contextual or (target and target.startswith("sbx_local_")):
+                sess_id = target if (target and target.startswith("sbx_local_")) else None
+                insp_res = global_execution_engine.inspect_session(session_id=sess_id)
+            else:
+                found_sess = None
+                with global_execution_engine._lock:
+                    for s in reversed(list(global_execution_engine._sessions.values())):
+                        if s.app_name.lower() == target.lower():
+                            found_sess = s
+                            break
+                if found_sess:
+                    insp_res = global_execution_engine.inspect_session(session_id=found_sess.session_id)
+                else:
+                    insp_res = inspect_window_ui(target=target)
+
+            msg = insp_res.get("summary") or "Inspection completed."
+            return {
+                "success": insp_res.get("success", False),
                 "action": "inspect",
-                "session_id": target,
-                "message": f"Inspection failed for '{target}': {res.get('error', 'Unknown error')}"
+                "session_id": insp_res.get("session_id"),
+                "app_name": insp_res.get("app_name") or insp_res.get("title") or target,
+                "pid": insp_res.get("pid"),
+                "message": msg,
+                "logs": insp_res.get("logs") or insp_res.get("log_lines", []),
+                "data": insp_res
             }
 
         if action == "launch" and target:

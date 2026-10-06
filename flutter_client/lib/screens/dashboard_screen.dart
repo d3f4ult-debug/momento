@@ -199,7 +199,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final action = res['action']?.toString() ?? '';
         final isSuccess = res['success'] == true;
 
-        if ((action == 'launch' || action == 'interact') && isSuccess) {
+        if ((action == 'launch' || action == 'interact' || (action == 'inspect' && res['session_id'] != null)) && isSuccess) {
           final rawLogs = res['logs'];
           final initialLogs = rawLogs is List
               ? rawLogs.map((e) => e.toString()).toList()
@@ -217,7 +217,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             status: res['status']?.toString() ?? 'running',
             logs: initialLogs,
           );
-          final actionVerb = action == 'interact' ? 'Automating' : 'Launched';
+          final actionVerb = action == 'interact'
+              ? 'Automating'
+              : (action == 'inspect' ? 'Inspected' : 'Launched');
           _addMomentoMessage('$actionVerb ${execResult.appName} successfully.', result: execResult);
           _pollActiveSessions();
         } else if (action == 'register' && isSuccess) {

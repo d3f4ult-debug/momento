@@ -118,9 +118,24 @@ def cmd_launch(args: argparse.Namespace, api_url: str) -> int:
 
 
 def cmd_inspect(args: argparse.Namespace, api_url: str) -> int:
-    """Inspect telemetry and runtime status of a sandbox session."""
+    """Inspect telemetry, active window, and UI hierarchy of a session or desktop."""
+    target = getattr(args, "session_id", None)
+
+    # If target is not a remote VPS session ID, inspect locally via DesktopAppBridge
+    if not target or not target.startswith("sbx_vps_"):
+        from client.desktop_bridge import DesktopAppBridge
+        bridge = DesktopAppBridge(backend_url=api_url)
+        res = bridge.send_message(f"inspect {target or 'active'}")
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+            return 0 if res.get("success") else 1
+        msg = res.get("message", "")
+        if msg:
+            print(msg)
+        return 0 if res.get("success") else 1
+
     url = f"{api_url.rstrip('/')}/api/sandbox/inspect"
-    payload = {"session_id": args.session_id}
+    payload = {"session_id": target}
     res = make_api_request(url, method="POST", data=payload)
 
     if not res.get("success"):
@@ -131,6 +146,20 @@ def cmd_inspect(args: argparse.Namespace, api_url: str) -> int:
     if getattr(args, "json", False):
         print(json.dumps(res, indent=2))
         return 0
+
+
+def cmd_windows(args: argparse.Namespace, api_url: str) -> int:
+    """List active visible desktop application windows."""
+    from client.desktop_bridge import DesktopAppBridge
+    bridge = DesktopAppBridge(backend_url=api_url)
+    res = bridge.send_message("list active windows")
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+        return 0 if res.get("success") else 1
+    msg = res.get("message", "")
+    if msg:
+        print(msg)
+    return 0 if res.get("success") else 1
 
     print(f"[*] Session Inspection: {res.get('session_id')}")
     print(f"    Status:         {res.get('status')}")
@@ -434,9 +463,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--no-wine", dest="use_wine", action="store_false", help="Disable Wine wrapper")
 
     # inspect
-    p_inspect = subparsers.add_parser("inspect", help="Inspect telemetry and status of a session")
-    p_inspect.add_argument("session_id", help="Session ID to inspect")
+    p_inspect = subparsers.add_parser("inspect", help="Inspect active application window, UI hierarchy, or session telemetry")
+    p_inspect.add_argument("session_id", nargs="?", default=None, help="Optional session ID or app name to inspect (defaults to active foreground window)")
     p_inspect.add_argument("--json", action="store_true", help="Output raw JSON response")
+
+    # windows
+    p_windows = subparsers.add_parser("windows", help="List active visible desktop application windows")
+    p_windows.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # sessions
     p_sessions = subparsers.add_parser("sessions", help="List all tracked sandbox sessions")
@@ -465,10 +498,10 @@ def preprocess_argv(argv: Optional[list]) -> Optional[list]:
     if not raw:
         return raw
 
-    # If first argument is a conversational sentence like "Momento, open notepad" or "open calc"
+    # If first argument is a conversational sentence like "Momento, open notepad" or "what is on screen"
     if len(raw) == 1 and not raw[0].startswith("-"):
         first = raw[0].strip().lower()
-        if any(first.startswith(p) for p in ("momento", "hey momento", "open ", "run ", "launch ", "start ", "stop ")):
+        if any(first.startswith(p) for p in ("momento", "hey momento", "open ", "run ", "launch ", "start ", "stop ", "inspect", "what", "list ")):
             return ["ask", raw[0]]
 
     # If launch command is present with --args
@@ -527,6 +560,7 @@ def main(argv: Optional[list] = None) -> int:
         "register": cmd_register,
         "launch": cmd_launch,
         "inspect": cmd_inspect,
+        "windows": cmd_windows,
         "sessions": cmd_sessions,
         "stop": cmd_stop,
         "execute": cmd_execute

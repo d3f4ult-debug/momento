@@ -247,6 +247,44 @@ class ExecutionEngine:
         with self._lock:
             return self._sessions.get(session_id)
 
+    def get_active_session(self) -> Optional[LocalSession]:
+        """Retrieve the most recently launched active/running local session."""
+        with self._lock:
+            # Check for running sessions first, most recent first
+            running = [s for s in reversed(list(self._sessions.values())) if s.process and s.process.poll() is None]
+            if running:
+                return running[0]
+            # Fall back to latest session
+            if self._sessions:
+                return list(self._sessions.values())[-1]
+        return None
+
+    def inspect_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Introspect active application window, UI hierarchy, and telemetry for a session.
+        Appends live inspection log lines into session logs for streaming to live cards.
+        """
+        from client.gui_automation import inspect_window_ui
+
+        session = self.get_session(session_id) if session_id else self.get_active_session()
+        target_pid = session.process.pid if (session and session.process) else None
+        target_name = session.app_name if session else None
+
+        inspection = inspect_window_ui(target=target_name, pid=target_pid)
+
+        if session:
+            # Append inspection stream into live session log buffer
+            for line in inspection.get("log_lines", []):
+                session.append_log(line)
+            inspection["session_id"] = session.session_id
+            inspection["app_name"] = session.app_name
+            inspection["logs"] = list(session.logs)
+        else:
+            inspection["session_id"] = None
+            inspection["logs"] = inspection.get("log_lines", [])
+
+        return inspection
+
     def list_sessions(self) -> List[Dict[str, Any]]:
         """List all active and recent local sessions."""
         with self._lock:

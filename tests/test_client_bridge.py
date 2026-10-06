@@ -147,3 +147,32 @@ def test_client_register_app_with_working_dir_and_args(tmp_path):
     assert data["app"]["data_file_path"] == data_file
 
 
+def test_client_windows_endpoint():
+    """Verify GET /api/client/windows lists active visible desktop windows."""
+    res = http_client.get("/api/client/windows")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert "windows" in data
+    assert isinstance(data["windows"], list)
+
+
+def test_client_inspect_endpoint():
+    """Verify POST /api/client/inspect performs contextual UI introspection."""
+    res = http_client.post("/api/client/inspect", json={"target": "active"})
+    assert res.status_code in (200, 400)
+    data = res.json()
+    assert "summary" in data or "message" in data or "error" in data
+
+
+def test_client_chat_contextual_inspection():
+    """Verify conversational UI introspection via /api/client/chat endpoint."""
+    res = http_client.post("/api/client/chat", json={"message": "what is on screen"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["action"] == "inspect"
+    assert "message" in data
+    assert "logs" in data
+
+
+
