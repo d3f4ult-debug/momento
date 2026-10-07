@@ -222,6 +222,82 @@ class DesktopAppBridge:
                     "logs": []
                 }
 
+        # Handle Lumo Image Generation
+        if action == "lumo_generate" and target:
+            from client.lumo_engine import global_lumo_engine
+            res = global_lumo_engine.generate_image(prompt=target)
+            return {
+                "success": res.get("success", True),
+                "action": "lumo_generate",
+                "engine": "lumo",
+                "message": res.get("message") or f"Lumo: Generated image for '{target}'",
+                "asset": res.get("asset")
+            }
+
+        # Handle Echo Speech Synthesis / Transcription
+        if action == "echo_speak" and target:
+            from client.echo_engine import global_echo_engine
+            res = global_echo_engine.synthesize_speech(text=target)
+            return {
+                "success": res.get("success", True),
+                "action": "echo_speak",
+                "engine": "echo",
+                "message": res.get("message") or f"Echo: Synthesized voice for '{target}'",
+                "speech": res.get("speech")
+            }
+
+        if action == "echo_transcribe":
+            from client.echo_engine import global_echo_engine
+            res = global_echo_engine.transcribe_audio()
+            return {
+                "success": True,
+                "action": "echo_transcribe",
+                "engine": "echo",
+                "message": f"Echo: Transcribed speech: \"{res['text']}\"",
+                "transcription": res
+            }
+
+        # Handle Forge App Building & Zero-Vision Hooks
+        if action == "forge_build" and target:
+            from client.forge_engine import global_forge_engine
+            res = global_forge_engine.build_app(name=target)
+            return {
+                "success": res.get("success", True),
+                "action": "forge_build",
+                "engine": "forge",
+                "message": res.get("message") or f"Forge: Built app '{target}' with native zero-vision controls.",
+                "app": res.get("app")
+            }
+
+        if action == "forge_hook" and target and args:
+            from client.forge_engine import global_forge_engine
+            hook_action = args[0]
+            res = global_forge_engine.execute_app_hook(app_id=target, action=hook_action)
+            return {
+                "success": res.get("success", True),
+                "action": "forge_hook",
+                "engine": "forge",
+                "message": f"Forge (Zero-Vision): {res.get('log', 'Executed hook.')}",
+                "result": res
+            }
+
+        # Handle Autopilot Workflow Enqueuing
+        if action == "autopilot_enqueue" and target:
+            from client.autopilot_engine import global_autopilot_engine
+            steps = [
+                {"action": "initialize", "description": f"Prepare environment for '{target}'"},
+                {"action": "execute", "description": f"Process workflow logic for '{target}'"},
+                {"action": "finalize", "description": "Verify execution state and persist results"}
+            ]
+            res = global_autopilot_engine.enqueue_workflow(name=target, steps=steps)
+            return {
+                "success": res.get("success", True),
+                "action": "autopilot_enqueue",
+                "engine": "autopilot",
+                "message": res.get("message") or f"Autopilot: Enqueued '{target}' for autonomous background execution.",
+                "task": res.get("task")
+            }
+
         # 1. Handle non-launch commands
         if action in ("sessions", "stop", "inspect", "list_windows", "scan", "help", "profiles", "profile", "profile_action"):
             # For sessions, combine local sessions and remote VPS sessions

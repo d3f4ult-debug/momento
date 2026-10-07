@@ -11,6 +11,10 @@ import '../widgets/register_app_dialog.dart';
 import '../widgets/settings_dialog.dart';
 import '../widgets/sidebar.dart';
 import '../widgets/target_picker_drop_zone.dart';
+import '../views/lumo_view.dart';
+import '../views/echo_view.dart';
+import '../views/forge_view.dart';
+import '../views/autopilot_view.dart';
 
 class DashboardScreen extends StatefulWidget {
   final BridgeService bridgeService;
@@ -32,6 +36,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<SessionInfo> _sessions = [];
   final List<ChatMessage> _messages = [];
 
+  String _activeEngine = 'maestro'; // 'maestro', 'lumo', 'echo', 'forge', 'autopilot'
   bool _isSending = false;
   Timer? _sessionPollTimer;
 
@@ -55,10 +60,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ChatMessage(
         id: 'welcome',
         sender: MessageSender.momento,
-        text: 'Welcome to Momento Desktop Workspace!\n\n'
-            'I can launch, monitor, and automate any application on your Windows machine or '
-            'inside your Contabo VPS Wine sandbox container.\n\n'
-            'Type in plain human language (e.g. "Momento, open notepad") or click any prompt below.',
+        text: 'Welcome to Momento Unified Local AI Platform!\n\n'
+            'I orchestrate five unified engines for your computer:\n'
+            '• Maestro: Central chat interface & desktop computer use engine\n'
+            '• Lumo: Visual asset generation & UI vision suite\n'
+            '• Echo: Audio transcription & speech synthesis core\n'
+            '• Forge: Custom app builder with zero-vision programmatic control\n'
+            '• Autopilot: Autonomous background digital worker & task queue\n\n'
+            'Switch engines using the sidebar or type naturally below.',
         timestamp: DateTime.now(),
       ),
     );
@@ -515,6 +524,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             sessions: _sessions,
             executionMode: widget.bridgeService.executionMode,
             backendUrl: widget.bridgeService.backendUrl,
+            activeEngine: _activeEngine,
+            onEngineSelected: (engine) {
+              setState(() => _activeEngine = engine);
+            },
             onModeChanged: (mode) {
               setState(() => widget.bridgeService.executionMode = mode);
               widget.bridgeService.saveSettings(
@@ -530,10 +543,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onProfileApp: _showProfileAppDialog,
           ),
 
-          // Right Main Area
+          // Right Main Area - Switch between 5 Core Engines
           Expanded(
-            child: Column(
-              children: [
+            child: _buildMainEngineView(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMainEngineView() {
+    switch (_activeEngine) {
+      case 'lumo':
+        return LumoView(bridgeService: widget.bridgeService);
+      case 'echo':
+        return EchoView(bridgeService: widget.bridgeService);
+      case 'forge':
+        return ForgeView(bridgeService: widget.bridgeService);
+      case 'autopilot':
+        return AutopilotView(bridgeService: widget.bridgeService);
+      case 'maestro':
+      default:
+        return _buildMaestroChatView();
+    }
+  }
+
+  Widget _buildMaestroChatView() {
+    return Column(
+      children: [
                 // Chat Header
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
@@ -659,11 +696,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
+            );
   }
 
   Widget _buildSuggestionChip(String label) {

@@ -832,4 +832,202 @@ class BridgeService {
     // Direct fallback via chat
     return sendMessage('in $appName, $action $target ${value ?? ""}');
   }
+
+  // ==========================================
+  // LUMO ENGINE (Image & Vision)
+  // ==========================================
+
+  Future<Map<String, dynamic>> generateImage(String prompt, {String style = 'modern', String resolution = '512x512'}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/lumo/generate'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'prompt': prompt, 'style': style, 'resolution': resolution}),
+        ).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('lumo generate $prompt');
+  }
+
+  Future<List<Map<String, dynamic>>> getLumoGallery() async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/lumo/gallery'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 3));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final list = data['assets'] as List? ?? [];
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  // ==========================================
+  // ECHO ENGINE (Audio Core)
+  // ==========================================
+
+  Future<Map<String, dynamic>> synthesizeSpeech(String text, {String voice = 'nova'}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/echo/synthesize'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'text': text, 'voice': voice}),
+        ).timeout(const Duration(seconds: 8));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('echo speak $text');
+  }
+
+  Future<Map<String, dynamic>> transcribeAudio({String? simulatedText}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/echo/transcribe'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'text': simulatedText}),
+        ).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('transcribe audio');
+  }
+
+  Future<List<Map<String, dynamic>>> getEchoRecordings() async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/echo/recordings'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 3));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final list = data['recordings'] as List? ?? [];
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  // ==========================================
+  // FORGE ENGINE (App Builder & Zero-Vision Control)
+  // ==========================================
+
+  Future<List<Map<String, dynamic>>> listForgeApps() async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/forge/apps'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 3));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final list = data['apps'] as List? ?? [];
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  Future<Map<String, dynamic>> buildForgeApp(String name, {String category = 'business', String description = ''}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/forge/build'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'name': name, 'category': category, 'description': description}),
+        ).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('forge build $name');
+  }
+
+  Future<Map<String, dynamic>> executeForgeHook(String appId, String action, {Map<String, dynamic>? payload}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/forge/apps/$appId/execute'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'action': action, 'payload': payload ?? {}}),
+        ).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('forge hook $appId action $action');
+  }
+
+  // ==========================================
+  // AUTOPILOT ENGINE (Autonomous Digital Worker)
+  // ==========================================
+
+  Future<List<Map<String, dynamic>>> listAutopilotTasks() async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.get(
+          Uri.parse('$url/api/client/autopilot/tasks'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 3));
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body) as Map<String, dynamic>;
+          final list = data['tasks'] as List? ?? [];
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  Future<Map<String, dynamic>> enqueueAutopilotWorkflow(String name, {List<Map<String, dynamic>>? steps, String? targetApp}) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    final taskSteps = steps ?? [
+      {'action': 'init', 'description': 'Prepare $name environment'},
+      {'action': 'run', 'description': 'Execute core steps for $name'},
+      {'action': 'finish', 'description': 'Commit $name results'}
+    ];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/autopilot/enqueue'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'name': name, 'steps': taskSteps, 'target_app': targetApp}),
+        ).timeout(const Duration(seconds: 10));
+        if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+    return sendMessage('autopilot $name');
+  }
+
+  Future<bool> cancelAutopilotTask(String taskId) async {
+    final urls = ['http://localhost:8000', AppConfig.defaultLocalUrl, _cleanUrl(backendUrl)];
+    for (final url in urls) {
+      try {
+        final res = await http.post(
+          Uri.parse('$url/api/client/autopilot/tasks/$taskId/cancel'),
+          headers: {'Accept': 'application/json'},
+        ).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
 }
+

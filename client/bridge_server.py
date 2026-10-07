@@ -223,24 +223,154 @@ async def get_profile_endpoint(app_name: str):
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
-@client_router.post("/profiles/{app_name}/action")
-async def execute_profile_action_endpoint(app_name: str, payload: Dict[str, Any] = Body(...)):
-    """Execute high-level semantic action mapped to application profile."""
-    from client.app_profiler import execute_profile_semantic_action
-    action_type = payload.get("action", "click")
-    target_descriptor = payload.get("target") or payload.get("control", "")
-    param_value = payload.get("value")
-    try:
-        res = execute_profile_semantic_action(
-            app_name=app_name,
-            action_type=action_type,
-            target_descriptor=target_descriptor,
-            param_value=param_value
-        )
-        status_code = 200 if res.get("success", False) else 400
-        return JSONResponse(status_code=status_code, content=res)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+# ==========================================
+# LUMO: Image Generation & Vision Suite Endpoints
+# ==========================================
+
+@client_router.post("/lumo/generate")
+async def lumo_generate_endpoint(payload: Dict[str, Any] = Body(...)):
+    """Generate visual asset from prompt."""
+    from client.lumo_engine import global_lumo_engine
+    prompt = payload.get("prompt", "")
+    style = payload.get("style", "modern")
+    resolution = payload.get("resolution", "512x512")
+    aspect_ratio = payload.get("aspect_ratio", "1:1")
+    negative_prompt = payload.get("negative_prompt", "")
+    res = global_lumo_engine.generate_image(
+        prompt=prompt,
+        style=style,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        negative_prompt=negative_prompt
+    )
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@client_router.get("/lumo/gallery")
+async def lumo_gallery_endpoint():
+    """List generated visual assets in Lumo gallery."""
+    from client.lumo_engine import global_lumo_engine
+    gallery = global_lumo_engine.get_gallery()
+    return JSONResponse(status_code=200, content={"success": True, "total": len(gallery), "assets": gallery})
+
+
+# ==========================================
+# ECHO: Audio Core Endpoints
+# ==========================================
+
+@client_router.post("/echo/synthesize")
+async def echo_synthesize_endpoint(payload: Dict[str, Any] = Body(...)):
+    """Synthesize voice speech from text."""
+    from client.echo_engine import global_echo_engine
+    text = payload.get("text", "")
+    voice = payload.get("voice", "nova")
+    res = global_echo_engine.synthesize_speech(text=text, voice=voice)
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@client_router.post("/echo/transcribe")
+async def echo_transcribe_endpoint(payload: Dict[str, Any] = Body(default={})):
+    """Transcribe speech audio into clean text."""
+    from client.echo_engine import global_echo_engine
+    audio_data = payload.get("audio_data")
+    simulated_text = payload.get("text")
+    res = global_echo_engine.transcribe_audio(audio_file_or_data=audio_data, simulated_text=simulated_text)
+    return JSONResponse(status_code=200, content=res)
+
+
+@client_router.get("/echo/recordings")
+async def echo_recordings_endpoint():
+    """List synthesized audio and voice recordings."""
+    from client.echo_engine import global_echo_engine
+    recs = global_echo_engine.get_recordings()
+    return JSONResponse(status_code=200, content={"success": True, "total": len(recs), "recordings": recs})
+
+
+# ==========================================
+# FORGE: App Builder & Zero-Vision Control Endpoints
+# ==========================================
+
+@client_router.get("/forge/apps")
+async def forge_list_apps_endpoint():
+    """List all custom applications created with Forge."""
+    from client.forge_engine import global_forge_engine
+    apps = global_forge_engine.list_apps()
+    return JSONResponse(status_code=200, content={"success": True, "total": len(apps), "apps": apps})
+
+
+@client_router.post("/forge/build")
+async def forge_build_app_endpoint(payload: Dict[str, Any] = Body(...)):
+    """Build a custom local application with programmatic zero-vision control schema."""
+    from client.forge_engine import global_forge_engine
+    name = payload.get("name") or payload.get("app_name") or payload.get("title") or ""
+    category = payload.get("category", "business")
+    description = payload.get("description", "")
+    fields = payload.get("fields")
+    actions = payload.get("actions")
+    initial_data = payload.get("initial_data")
+    res = global_forge_engine.build_app(
+        name=name,
+        category=category,
+        description=description,
+        fields=fields,
+        actions=actions,
+        initial_data=initial_data
+    )
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@client_router.post("/forge/apps/{app_id}/execute")
+async def forge_execute_hook_endpoint(app_id: str, payload: Dict[str, Any] = Body(...)):
+    """Execute programmatic zero-vision control hook without vision models."""
+    from client.forge_engine import global_forge_engine
+    action = payload.get("action", "add_record")
+    params = payload.get("payload") or payload.get("params") or {}
+    res = global_forge_engine.execute_app_hook(app_id=app_id, action=action, payload=params)
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+# ==========================================
+# AUTOPILOT: Autonomous Background Digital Worker Endpoints
+# ==========================================
+
+@client_router.get("/autopilot/tasks")
+async def autopilot_list_tasks_endpoint():
+    """List autonomous background workflow tasks."""
+    from client.autopilot_engine import global_autopilot_engine
+    tasks = global_autopilot_engine.list_tasks()
+    return JSONResponse(status_code=200, content={"success": True, "total": len(tasks), "tasks": tasks})
+
+
+@client_router.post("/autopilot/enqueue")
+async def autopilot_enqueue_endpoint(payload: Dict[str, Any] = Body(...)):
+    """Enqueue multi-step autonomous background workflow."""
+    from client.autopilot_engine import global_autopilot_engine
+    name = payload.get("name", "Automated Workflow")
+    steps = payload.get("steps") or [{"action": "default", "description": "Execute task"}]
+    target_app = payload.get("target_app")
+    schedule_interval = payload.get("schedule_interval_sec")
+    res = global_autopilot_engine.enqueue_workflow(
+        name=name,
+        steps=steps,
+        target_app=target_app,
+        schedule_interval_sec=schedule_interval
+    )
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@client_router.post("/autopilot/tasks/{task_id}/cancel")
+async def autopilot_cancel_endpoint(task_id: str):
+    """Cancel a running autonomous task."""
+    from client.autopilot_engine import global_autopilot_engine
+    res = global_autopilot_engine.cancel_task(task_id)
+    status_code = 200 if res.get("success", False) else 400
+    return JSONResponse(status_code=status_code, content=res)
+
 
 
 

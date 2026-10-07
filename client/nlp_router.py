@@ -98,6 +98,33 @@ class NLPRouter:
         ):
             return ("list_windows", None, None)
 
+        # Lumo: Image Generation / Vision commands
+        m_lumo = re.match(r"^(?:lumo\s*[,:]?\s*|generate image\s+|draw\s+|create image\s+|paint\s+)(.+)$", clean, flags=re.IGNORECASE)
+        if m_lumo:
+            return ("lumo_generate", m_lumo.group(1).strip(), None)
+
+        # Echo: Audio TTS / Transcription commands
+        m_echo_tts = re.match(r"^(?:echo\s*[,:]?\s*|say\s+|speak\s+|read aloud\s+|synthesize voice\s+)(.+)$", clean, flags=re.IGNORECASE)
+        if m_echo_tts:
+            return ("echo_speak", m_echo_tts.group(1).strip(), None)
+
+        if lower in ("transcribe audio", "listen", "transcribe", "speech to text", "echo listen"):
+            return ("echo_transcribe", None, None)
+
+        # Forge: App Builder & Zero-Vision Control commands
+        m_forge_build = re.match(r"^(?:forge\s*[,:]?\s*build\s+|build app\s+|create app\s+|make app\s+)(.+)$", clean, flags=re.IGNORECASE)
+        if m_forge_build:
+            return ("forge_build", m_forge_build.group(1).strip(), None)
+
+        m_forge_hook = re.match(r"^(?:forge\s+hook\s+|in forge\s+)(.+?)\s+(?:action\s+|do\s+)(.+)$", clean, flags=re.IGNORECASE)
+        if m_forge_hook:
+            return ("forge_hook", m_forge_hook.group(1).strip(), [m_forge_hook.group(2).strip()])
+
+        # Autopilot: Autonomous Background Task commands
+        m_autopilot = re.match(r"^(?:autopilot\s*[,:]?\s*|enqueue task\s+|run workflow\s+|background task\s+)(.+)$", clean, flags=re.IGNORECASE)
+        if m_autopilot:
+            return ("autopilot_enqueue", m_autopilot.group(1).strip(), None)
+
         # Check for contextual screen / UI inspection commands
         if lower in (
             "what is on screen", "what's on screen", "whats on screen",

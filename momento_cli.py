@@ -121,8 +121,8 @@ def cmd_inspect(args: argparse.Namespace, api_url: str) -> int:
     """Inspect telemetry, active window, and UI hierarchy of a session or desktop."""
     target = getattr(args, "session_id", None)
 
-    # If target is not a remote VPS session ID, inspect locally via DesktopAppBridge
-    if not target or not target.startswith("sbx_vps_"):
+    # If target is not a remote VPS sandbox session ID (starts with sbx_), inspect locally via DesktopAppBridge
+    if not target or not target.startswith("sbx_"):
         from client.desktop_bridge import DesktopAppBridge
         bridge = DesktopAppBridge(backend_url=api_url)
         res = bridge.send_message(f"inspect {target or 'active'}")

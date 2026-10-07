@@ -11,6 +11,8 @@ class Sidebar extends StatefulWidget {
   final List<SessionInfo> sessions;
   final String executionMode;
   final String backendUrl;
+  final String activeEngine;
+  final Function(String engine) onEngineSelected;
   final Function(String mode) onModeChanged;
   final Function(AppInfo app) onLaunchApp;
   final Function(String sessionId) onStopSession;
@@ -25,6 +27,8 @@ class Sidebar extends StatefulWidget {
     required this.sessions,
     required this.executionMode,
     required this.backendUrl,
+    this.activeEngine = 'maestro',
+    required this.onEngineSelected,
     required this.onModeChanged,
     required this.onLaunchApp,
     required this.onStopSession,
@@ -57,6 +61,68 @@ class _SidebarState extends State<Sidebar> {
           app.id.toLowerCase().contains(q) ||
           app.aliases.any((a) => a.toLowerCase().contains(q));
     }).toList();
+  }
+
+  Widget _buildEngineNavTile({
+    required String id,
+    required String name,
+    required String tag,
+    required IconData icon,
+    required Color color,
+  }) {
+    final isSelected = widget.activeEngine == id;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => widget.onEngineSelected(id),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: isSelected ? color.withValues(alpha: 0.15) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isSelected ? color.withValues(alpha: 0.4) : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 15, color: isSelected ? color : AppTheme.textMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected ? AppTheme.textMain : AppTheme.textMuted,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withValues(alpha: 0.2) : AppTheme.bgDark,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    tag,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: isSelected ? color : AppTheme.textMuted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -128,9 +194,62 @@ class _SidebarState extends State<Sidebar> {
           ),
           const Divider(height: 1),
 
+          // Core Engines Unified Navigation Bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  child: Text(
+                    'CORE PLATFORM ENGINES',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textMuted, letterSpacing: 0.5),
+                  ),
+                ),
+                _buildEngineNavTile(
+                  id: 'maestro',
+                  name: 'Maestro',
+                  tag: 'ORCHESTRATOR',
+                  icon: Icons.computer,
+                  color: AppTheme.accent,
+                ),
+                _buildEngineNavTile(
+                  id: 'lumo',
+                  name: 'Lumo',
+                  tag: 'IMAGE & VISION',
+                  icon: Icons.palette_outlined,
+                  color: const Color(0xFFEC4899),
+                ),
+                _buildEngineNavTile(
+                  id: 'echo',
+                  name: 'Echo',
+                  tag: 'AUDIO CORE',
+                  icon: Icons.graphic_eq,
+                  color: const Color(0xFF06B6D4),
+                ),
+                _buildEngineNavTile(
+                  id: 'forge',
+                  name: 'Forge',
+                  tag: 'APP BUILDER',
+                  icon: Icons.handyman,
+                  color: const Color(0xFFF59E0B),
+                ),
+                _buildEngineNavTile(
+                  id: 'autopilot',
+                  name: 'Autopilot',
+                  tag: 'BACKGROUND WORKER',
+                  icon: Icons.rocket_launch,
+                  color: const Color(0xFF8B5CF6),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+
           // Execution Mode Pills Bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
